@@ -60,6 +60,10 @@ mcp = [
   "mcp >= 1.13.0",
 ]
 
+ai_troubleshooter = [
+  "strands-agents >= 1.15.0",
+]
+
 [project.scripts]
 deadline = "deadline.client.cli:main"
 
