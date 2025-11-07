@@ -13,6 +13,7 @@ __all__ = [
     "attachment_group",
     "manifest_group",
     "mcp_server_command",
+    "agents_group",
 ]
 
 from . import (
@@ -28,4 +29,5 @@ from . import (
     attachment_group as attachment_group,
     manifest_group as manifest_group,
     mcp_server_command as mcp_server_command,
+    agents_group as agents_group,
 )

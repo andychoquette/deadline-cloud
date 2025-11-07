@@ -60,6 +60,13 @@ mcp = [
   "mcp >= 1.13.0",
 ]
 
+ai_troubleshooter = [
+  "strands-agents >= 1.15.0",
+  "mcp >= 1.13.0",
+  "openjd-cli >= 0.7.3",
+  "rich >= 13.0.0"
+]
+
 [project.scripts]
 deadline = "deadline.client.cli:main"
 

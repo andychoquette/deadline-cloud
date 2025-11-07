@@ -65,9 +65,14 @@ or if you want the optional gui dependencies:
 $ pip install "deadline[gui]"
 ```
 
-if you want the optional mcp dependencies:
+or if you want the optional mcp dependencies:
 ```sh
 $ pip install "deadline[mcp]"
+```
+
+or you want the optional agents dependencies:
+```sh
+$ pip install "deadline[agents]"
 ```
 
 ## Usage
