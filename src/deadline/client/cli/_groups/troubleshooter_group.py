@@ -23,15 +23,19 @@ def cli_troubleshoot():
 @click.option("--profile", help="The AWS profile to use.")
 @click.option("--farm-id", help="The farm ID.")
 @click.option("--queue-id", help="The queue ID.")
-@click.option("--job-id", required=True, help="The job ID to troubleshoot.")
+@click.option("--job-id", help="The job ID to troubleshoot (optional for general troubleshooting).")
+@click.option("--job-template-bucket", help="S3 bucket to export job templates for diagnosis.")
 @click.option("--interactive/--no-interactive", default=True, help="Enable interactive mode for follow-up questions.")
 @_handle_error
-def troubleshoot_diagnose(profile, farm_id, queue_id, job_id, interactive, **args):
+def troubleshoot_diagnose(profile, farm_id, queue_id, job_id, job_template_bucket, interactive, **args):
     """
     Diagnose issues with a Deadline Cloud job using AI troubleshooting.
     
     By default, runs in interactive mode allowing you to ask follow-up questions.
     Use --no-interactive for single-shot troubleshooting.
+    
+    If --job-id is not provided, starts in general troubleshooting mode where you can
+    ask questions about Deadline Cloud or provide a job ID interactively.
     """
     try:
         from ....ai_troubleshooter import run_diagnostics
@@ -58,12 +62,18 @@ def troubleshoot_diagnose(profile, farm_id, queue_id, job_id, interactive, **arg
     farm_id_value = config_file.get_setting("defaults.farm_id", config=config)
     queue_id_value = config_file.get_setting("defaults.queue_id", config=config)
     
+    # Validate that if non-interactive mode is used, job_id must be provided
+    if not interactive and not job_id:
+        click.echo("Error: --job-id is required when using --no-interactive mode.", err=True)
+        sys.exit(1)
+    
     # Pass values and config to troubleshooter
     try:
         result, orchestrator = run_diagnostics(
             job_id=job_id,
             farm_id=farm_id_value,
             queue_id=queue_id_value,
+            job_template_bucket=job_template_bucket,
             config=config
         )
         

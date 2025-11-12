@@ -4,12 +4,12 @@ Fleet Configuration Agent - Validates Deadline Cloud fleet configuration and ide
 import boto3
 from deadline.ai_troubleshooter.aws_clients import get_client
 from strands import Agent, tool
-from deadline.ai_troubleshooter.model_config import fleet_configuration_model
+from deadline.ai_troubleshooter.model_config import resource_configuration_model
 
-FLEET_CONFIGURATION_AGENT_SYSTEM_PROMPT = """
-You are a fleet configuration specialist for AWS Deadline Cloud.
+RESOURCE_CONFIGURATION_AGENT_SYSTEM_PROMPT = """
+You are a resource configuration specialist for AWS Deadline Cloud.
 
-Your role is to validate fleet configurations and identify common issues that prevent jobs from running, in order of confidence (high, medium, low).
+Your role is to validate fleet and queue configurations and identify common issues that prevent jobs from running, in order of confidence (high, medium, low).
 
 ## Key Checks
 
@@ -122,7 +122,7 @@ def get_fleet_details(farm_id: str, fleet_id: str) -> str:
         return result
         
     except Exception as e:
-        return f"❌ Error getting fleet details: {str(e)}"
+        return f"❌ Error getting fleet details: {e}"
 
 
 @tool
@@ -284,7 +284,7 @@ def validate_fleet_configuration(farm_id: str, fleet_id: str) -> str:
         return f"❌ Error validating fleet configuration: {str(e)}"
 
 @tool
-def fleet_configuration_agent(query: str) -> str:
+def resource_configuration_agent(query: str) -> str:
     """
     Validates fleet configuration and identifies common issues.
     
@@ -296,8 +296,8 @@ def fleet_configuration_agent(query: str) -> str:
     """
     try:
         fleet_agent = Agent(
-            system_prompt=FLEET_CONFIGURATION_AGENT_SYSTEM_PROMPT,
-            model=fleet_configuration_model,  # Using centralized model config
+            system_prompt=RESOURCE_CONFIGURATION_AGENT_SYSTEM_PROMPT,
+            model=resource_configuration_model,  # Using centralized model config
             tools=[
                 get_fleet_details,
                 list_fleet_queues,

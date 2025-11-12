@@ -2,7 +2,7 @@
 Custom Deadline Cloud tools using the SDK directly.
 Alternative to MCP server until mcp-server command is available.
 """
-from strands import tool
+from strands import tool, ToolContext
 import logging
 from typing import Optional
 from configparser import ConfigParser
@@ -201,49 +201,266 @@ def list_deadline_queues(farm_id: str) -> str:
         return format_tool_error(e, context=f"listing queues in farm {farm_id}")
 
 @tool
-def list_deadline_fleets(farm_id: str, max_results: int = 20) -> str:
+def get_queue_details(farm_id: str, queue_id: str) -> str:
     """
-    List all fleets in a specific Deadline Cloud farm.
+    Get detailed information about a specific Deadline Cloud queue.
+    
+    This includes job attachments configuration, which specifies the S3 bucket
+    and root prefix where job files are stored.
     
     Args:
-        farm_id: The ID of the farm to list fleets from
-        max_results: Maximum number of fleets to return (default: 20)
+        farm_id: The ID of the farm
+        queue_id: The ID of the queue
         
     Returns:
-        String containing fleet information or error message
+        String containing detailed queue information including job attachments settings
+    """
+    
+    try:
+        client = get_deadline_client()
+        response = client.get_queue(farmId=farm_id, queueId=queue_id)
+        
+        result = f"**Queue Details for {queue_id}**\n\n"
+        result += f"Display Name: {response.get('displayName', 'N/A')}\n"
+        result += f"Status: {response.get('status', 'N/A')}\n"
+        result += f"Default Budget Action: {response.get('defaultBudgetAction', 'N/A')}\n"
+        result += f"Created: {response.get('createdAt', 'N/A')}\n"
+        result += f"Created By: {response.get('createdBy', 'N/A')}\n"
+        
+        # Job Attachments Settings - CRITICAL for job attachments troubleshooting
+        if response.get('jobAttachmentSettings'):
+            result += f"\n**Job Attachments Settings:**\n"
+            settings = response['jobAttachmentSettings']
+            
+            bucket_name = settings.get('s3BucketName', 'N/A')
+            root_prefix = settings.get('rootPrefix', '')
+            
+            result += f"S3 Bucket: {bucket_name}\n"
+            result += f"Root Prefix: {root_prefix}\n"
+            
+            if bucket_name != 'N/A':
+                result += f"\n💡 Job attachments are stored at: s3://{bucket_name}/{root_prefix}\n"
+                result += f"💡 Use this bucket name when checking S3 permissions.\n"
+        else:
+            result += f"\n⚠️  No job attachments settings configured for this queue.\n"
+        
+        # Role ARN
+        if response.get('roleArn'):
+            result += f"\nQueue Role ARN: {response['roleArn']}\n"
+        
+        # Description
+        if response.get('description'):
+            result += f"\nDescription: {response['description']}\n"
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Error getting queue details: {e}")
+        return format_tool_error(e, context=f"getting details for queue {queue_id}")
+
+
+@tool
+def list_queue_environments(farm_id: str, queue_id: str, max_results: int = 20) -> str:
+    """
+    List all environments configured for a specific Deadline Cloud queue.
+    
+    Queue environments define the software and configuration that workers use
+    during job setup (envEnter) and teardown (envExit). Issues with environments
+    can cause setup/teardown failures.
+    
+    Args:
+        farm_id: The ID of the farm
+        queue_id: The ID of the queue
+        max_results: Maximum number of environments to return (default: 20)
+        
+    Returns:
+        String containing queue environment information or error message
     """
     
     try:
         client = get_deadline_client()
         
-        # Build parameters
-        params = {'farmId': farm_id, 'maxResults': min(max_results, 100)}
+        response = client.list_queue_environments(
+            farmId=farm_id,
+            queueId=queue_id,
+            maxResults=min(max_results, 100)
+        )
         
-        # Add principal ID if available (must be Deadline identity ID)
-        principal_id = os.getenv('DEADLINE_PRINCIPAL_ID')
-        if principal_id:
-            params['principalId'] = principal_id
+        environments = response.get('environments', [])
+        if not environments:
+            return f"No environments found for queue {queue_id}."
         
-        response = client.list_fleets(**params)
+        result = f"Found {len(environments)} environment(s) for queue {queue_id}:\n\n"
+        for env in environments:
+            result += f"- **Environment {env['queueEnvironmentId']}**\n"
+            result += f"  Name: {env.get('name', 'N/A')}\n"
+            result += f"  Priority: {env.get('priority', 'N/A')}\n"
+            
+            if env.get('templateType'):
+                result += f"  Template Type: {env['templateType']}\n"
+            
+            result += "\n"
         
-        fleets = response.get('fleets', [])
-        if not fleets:
-            return f"No fleets found in farm {farm_id}."
-        
-        result = f"Found {len(fleets)} fleet(s) in farm {farm_id}:\n\n"
-        for fleet in fleets:
-            result += f"- **{fleet['displayName']}** (ID: {fleet['fleetId']})\n"
-            result += f"  Status: {fleet.get('status', 'N/A')}\n"
-            result += f"  Min Workers: {fleet.get('minWorkerCount', 0)}\n"
-            result += f"  Max Workers: {fleet.get('maxWorkerCount', 0)}\n"
-            result += f"  Worker Count: {fleet.get('workerCount', 0)}\n"
-            result += f"  Auto Scaling: {fleet.get('autoScalingStatus', {}).get('status', 'N/A')}\n\n"
+        result += "\n💡 Use get_queue_environment to see detailed configuration for each environment.\n"
         
         return result
     
     except Exception as e:
-        logger.error(f"Error listing fleets: {e}")
-        return format_tool_error(e, context=f"listing fleets in farm {farm_id}")
+        logger.error(f"Error listing queue environments: {e}")
+        return format_tool_error(e, context=f"listing environments for queue {queue_id}")
+
+
+@tool
+def get_queue_environment(farm_id: str, queue_id: str, queue_environment_id: str) -> str:
+    """
+    Get detailed configuration for a specific queue environment.
+    
+    This is critical for diagnosing setup/teardown issues. The environment defines:
+    - Software packages and versions to install
+    - Environment variables to set
+    - Scripts to run during setup (envEnter) and teardown (envExit)
+    
+    Common issues found in environments:
+    - Missing or incorrect software dependencies
+    - Invalid environment variable configurations
+    - Script errors in setup/teardown commands
+    - Incorrect file paths or permissions
+    
+    Args:
+        farm_id: The ID of the farm
+        queue_id: The ID of the queue
+        queue_environment_id: The ID of the queue environment
+        
+    Returns:
+        String containing detailed environment configuration or error message
+    """
+    
+    try:
+        client = get_deadline_client()
+        
+        response = client.get_queue_environment(
+            farmId=farm_id,
+            queueId=queue_id,
+            queueEnvironmentId=queue_environment_id
+        )
+        
+        result = f"**Queue Environment Details: {queue_environment_id}**\n\n"
+        result += f"Name: {response.get('name', 'N/A')}\n"
+        result += f"Priority: {response.get('priority', 'N/A')}\n"
+        result += f"Template Type: {response.get('templateType', 'N/A')}\n"
+        result += f"Created: {response.get('createdAt', 'N/A')}\n"
+        result += f"Created By: {response.get('createdBy', 'N/A')}\n"
+        result += f"Updated: {response.get('updatedAt', 'N/A')}\n"
+        
+        if response.get('updatedBy'):
+            result += f"Updated By: {response['updatedBy']}\n"
+        
+        # Template content - this is the key configuration
+        if response.get('template'):
+            result += f"\n**Environment Template:**\n"
+            template = response['template']
+            
+            # Show template in a readable format
+            import json
+            try:
+                # Try to parse as JSON for better formatting
+                if isinstance(template, str):
+                    template_obj = json.loads(template)
+                    result += f"```json\n{json.dumps(template_obj, indent=2)}\n```\n"
+                else:
+                    result += f"```json\n{json.dumps(template, indent=2)}\n```\n"
+            except:
+                # If not JSON, show as-is
+                result += f"```\n{template}\n```\n"
+        
+        result += "\n**Troubleshooting Tips:**\n"
+        result += "- Check for missing software dependencies in the template\n"
+        result += "- Verify environment variables are correctly formatted\n"
+        result += "- Look for script errors in setup/teardown commands\n"
+        result += "- Ensure file paths and permissions are correct\n"
+        result += "- Compare with working environments if available\n"
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Error getting queue environment: {e}")
+        return format_tool_error(e, context=f"getting environment {queue_environment_id} for queue {queue_id}")
+
+
+@tool
+def get_fleet_details(farm_id: str, fleet_id: str) -> str:
+    """
+    Get detailed information about a specific Deadline Cloud fleet.
+    
+    Use list_queue_fleet_associations to get the fleet_id for a queue first.
+    
+    Args:
+        farm_id: The ID of the farm
+        fleet_id: The ID of the fleet
+        
+    Returns:
+        String containing detailed fleet information or error message
+    """
+    
+    try:
+        client = get_deadline_client()
+        response = client.get_fleet(farmId=farm_id, fleetId=fleet_id)
+        
+        result = f"**Fleet Details for {fleet_id}**\n\n"
+        result += f"Display Name: {response.get('displayName', 'N/A')}\n"
+        result += f"Status: {response.get('status', 'N/A')}\n"
+        result += f"Farm ID: {response.get('farmId', 'N/A')}\n"
+        result += f"Created: {response.get('createdAt', 'N/A')}\n"
+        result += f"Created By: {response.get('createdBy', 'N/A')}\n"
+        result += f"Updated: {response.get('updatedAt', 'N/A')}\n"
+        
+        # Worker configuration
+        result += f"\n**Worker Configuration:**\n"
+        result += f"Min Workers: {response.get('minWorkerCount', 0)}\n"
+        result += f"Max Workers: {response.get('maxWorkerCount', 0)}\n"
+        result += f"Current Worker Count: {response.get('workerCount', 0)}\n"
+        
+        # Auto scaling
+        if response.get('autoScalingStatus'):
+            auto_scaling = response['autoScalingStatus']
+            result += f"\n**Auto Scaling:**\n"
+            result += f"Status: {auto_scaling.get('status', 'N/A')}\n"
+            if auto_scaling.get('statusMessage'):
+                result += f"Message: {auto_scaling['statusMessage']}\n"
+        
+        # Configuration
+        if response.get('configuration'):
+            config = response['configuration']
+            result += f"\n**Configuration:**\n"
+            
+            if 'customerManaged' in config:
+                result += f"Type: Customer Managed\n"
+                cm = config['customerManaged']
+                result += f"Mode: {cm.get('mode', 'N/A')}\n"
+                if cm.get('workerCapabilities'):
+                    result += f"Worker Capabilities: {cm['workerCapabilities']}\n"
+            elif 'serviceManagedEc2' in config:
+                result += f"Type: Service Managed EC2\n"
+                sm = config['serviceManagedEc2']
+                instance_caps = sm.get('instanceCapabilities', {})
+                if isinstance(instance_caps, dict):
+                    result += f"Instance Type: {instance_caps.get('instanceType', 'N/A')}\n"
+                else:
+                    result += f"Instance Capabilities: {instance_caps}\n"
+        
+        # Role ARN
+        if response.get('roleArn'):
+            result += f"\nFleet Role ARN: {response['roleArn']}\n"
+        
+        # Description
+        if response.get('description'):
+            result += f"\nDescription: {response['description']}\n"
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Error getting fleet details: {e}")
+        return format_tool_error(e, context=f"getting details for fleet {fleet_id}")
 
 
 @tool
@@ -422,19 +639,37 @@ def get_deadline_job_details(farm_id: str, queue_id: str, job_id: str) -> str:
         
         result = f"**Job Details for {job_id}**\n\n"
         result += f"Name: {response.get('name', 'N/A')}\n"
-        result += f"Status: {response.get('lifecycleStatus', 'N/A')}\n"
+        result += f"Lifecycle Status: {response.get('lifecycleStatus', 'N/A')}\n"
         result += f"Priority: {response.get('priority', 'N/A')}\n"
         result += f"Created: {response.get('createdAt', 'N/A')}\n"
         result += f"Started: {response.get('startedAt', 'N/A')}\n"
         result += f"Ended: {response.get('endedAt', 'N/A')}\n"
         
+        # CRITICAL: Include task execution status
+        if response.get('taskRunStatus'):
+            result += f"\n**Task Execution Status: {response['taskRunStatus']}**\n"
+        
+        if response.get('taskRunStatusCounts'):
+            result += f"\n**Task Status Counts:**\n"
+            counts = response['taskRunStatusCounts']
+            for status, count in counts.items():
+                result += f"- {status}: {count}\n"
+            
+            # Highlight if there are failed tasks
+            if counts.get('FAILED', 0) > 0:
+                result += f"\n⚠️  **WARNING: {counts['FAILED']} task(s) FAILED**\n"
+        
         if response.get('lifecycleStatusMessage'):
-            result += f"\n**Status Message:**\n{response['lifecycleStatusMessage']}\n"
+            result += f"\n**Lifecycle Status Message:**\n{response['lifecycleStatusMessage']}\n"
         
         if response.get('parameters'):
             result += f"\n**Parameters:**\n"
             for key, value in response['parameters'].items():
                 result += f"- {key}: {value}\n"
+        
+        # Add note about lifecycle vs task status
+        result += f"\n💡 **Note**: Lifecycle Status indicates job creation status. "
+        result += f"Task Execution Status indicates whether tasks succeeded or failed.\n"
         
         return result
     
@@ -443,10 +678,12 @@ def get_deadline_job_details(farm_id: str, queue_id: str, job_id: str) -> str:
         return format_tool_error(e, context=f"getting details for job {job_id}")
 
 
-@tool
-def list_deadline_steps(farm_id: str, queue_id: str, job_id: str, max_results: int = 20) -> str:
+@tool(context=True)
+def list_deadline_steps(farm_id: str, queue_id: str, job_id: str, max_results: int = 20, tool_context=None) -> str:
     """
     Search for steps in a specific Deadline Cloud job using the SearchSteps API.
+    
+    This tool automatically tracks discovered step IDs in agent state for use by other tools.
     
     Args:
         farm_id: The ID of the farm
@@ -457,6 +694,7 @@ def list_deadline_steps(farm_id: str, queue_id: str, job_id: str, max_results: i
     Returns:
         String containing step information or error message
     """
+    from strands import ToolContext
     
     try:
         client = get_deadline_client()
@@ -477,6 +715,16 @@ def list_deadline_steps(farm_id: str, queue_id: str, job_id: str, max_results: i
         
         if not steps:
             return f"No steps found for job {job_id}."
+        
+        # Track discovered step IDs in agent state
+        if tool_context and isinstance(tool_context, ToolContext):
+            discovered_steps = tool_context.agent.state.get("discovered_steps") or []
+            for step in steps:
+                step_id = step['stepId']
+                if step_id not in discovered_steps:
+                    discovered_steps.append(step_id)
+            tool_context.agent.state.set("discovered_steps", discovered_steps)
+            logger.info(f"Tracked {len(steps)} step IDs in agent state")
         
         result = f"Found {len(steps)} of {total_results} step(s) for job {job_id}:\n\n"
         
@@ -566,21 +814,61 @@ def get_deadline_step_details(farm_id: str, queue_id: str, job_id: str, step_id:
         return format_tool_error(e, context=f"getting details for step {step_id}")
 
 
-@tool
-def list_deadline_tasks(farm_id: str, queue_id: str, job_id: str, step_id: str, max_results: int = 20) -> str:
+@tool(context=True)
+def list_deadline_tasks(
+    farm_id: str, 
+    queue_id: str, 
+    job_id: str, 
+    step_id: str, 
+    status_filter: str = None,
+    max_results: int = 20, 
+    tool_context=None
+) -> str:
     """
     Search for tasks in a specific Deadline Cloud step using the SearchTasks API.
+    
+    This tool automatically tracks discovered task IDs in agent state for use by other tools.
     
     Args:
         farm_id: The ID of the farm
         queue_id: The ID of the queue
         job_id: The ID of the job
         step_id: The ID of the step
+        status_filter: Optional filter by task run status. Valid values:
+            - PENDING: Task is waiting to run
+            - READY: Task is ready to run
+            - ASSIGNED: Task has been assigned to a worker
+            - STARTING: Task is starting
+            - SCHEDULED: Task is scheduled
+            - INTERRUPTING: Task is being interrupted
+            - RUNNING: Task is currently running
+            - SUSPENDED: Task is suspended
+            - CANCELED: Task was canceled
+            - FAILED: Task failed (use this to find failed tasks)
+            - SUCCEEDED: Task completed successfully
+            - NOT_COMPATIBLE: Task is not compatible with available workers
         max_results: Maximum number of tasks to return (default: 20)
         
     Returns:
         String containing task information or error message
     """
+    from strands import ToolContext
+    
+    # Validate status_filter if provided
+    valid_statuses = [
+        'PENDING', 'READY', 'ASSIGNED', 'STARTING', 'SCHEDULED', 
+        'INTERRUPTING', 'RUNNING', 'SUSPENDED', 'CANCELED', 
+        'FAILED', 'SUCCEEDED', 'NOT_COMPATIBLE'
+    ]
+    
+    if status_filter and status_filter not in valid_statuses:
+        return format_tool_error(
+            Exception(
+                f"Invalid status_filter: {status_filter}\n\n"
+                f"Valid task run statuses:\n" + "\n".join(f"- {s}" for s in valid_statuses)
+            ),
+            context="listing tasks with invalid status filter"
+        )
     
     try:
         client = get_deadline_client()
@@ -594,15 +882,43 @@ def list_deadline_tasks(farm_id: str, queue_id: str, job_id: str, step_id: str, 
             'pageSize': min(max_results, 100)
         }
         
+        # Add status filter if provided
+        # AWS Deadline Cloud uses a specific filter structure with typed filters
+        if status_filter:
+            search_params['filterExpressions'] = {
+                'filters': [
+                    {
+                        'stringFilter': {
+                            'name': 'runStatus',
+                            'operator': 'EQUAL',
+                            'value': status_filter
+                        }
+                    }
+                ]
+            }
+        
         response = client.search_tasks(**search_params)
         
         tasks = response.get('tasks', [])
         total_results = response.get('totalResults', 0)
         
-        if not tasks:
-            return f"No tasks found for step {step_id}."
+        # Build descriptive message
+        filter_desc = f" with status {status_filter}" if status_filter else ""
         
-        result = f"Found {len(tasks)} of {total_results} task(s) for step {step_id}:\n\n"
+        if not tasks:
+            return f"No tasks found for step {step_id}{filter_desc}."
+        
+        # Track discovered task IDs in agent state
+        if tool_context and isinstance(tool_context, ToolContext):
+            discovered_tasks = tool_context.agent.state.get("discovered_tasks") or []
+            for task in tasks:
+                task_id = task['taskId']
+                if task_id not in discovered_tasks:
+                    discovered_tasks.append(task_id)
+            tool_context.agent.state.set("discovered_tasks", discovered_tasks)
+            logger.info(f"Tracked {len(tasks)} task IDs in agent state")
+        
+        result = f"Found {len(tasks)} of {total_results} task(s) for step {step_id}{filter_desc}:\n\n"
         
         for task in tasks:
             result += f"- **Task {task['taskId']}**\n"
@@ -626,21 +942,74 @@ def list_deadline_tasks(farm_id: str, queue_id: str, job_id: str, step_id: str, 
         return format_tool_error(e, context=f"listing tasks in step {step_id}")
 
 
-@tool
-def get_deadline_task_details(farm_id: str, queue_id: str, job_id: str, step_id: str, task_id: str) -> str:
+@tool(context=True)
+def get_deadline_task_details(farm_id: str, queue_id: str, job_id: str, step_id: str, task_id: str, tool_context=None) -> str:
     """
     Get detailed information about a specific Deadline Cloud task.
+    
+    CRITICAL: This function requires both a STEP ID and a TASK ID.
+    - Step IDs start with 'step-' (e.g., step-a1b2c3d4e5f6789012345678901234ab)
+    - Task IDs start with 'task-' (e.g., task-5c1014dc9d7a4602874695e53210c21d-1)
+    
+    To get the correct IDs:
+    1. Call list_deadline_steps to get step IDs
+    2. Call list_deadline_tasks with the step_id to get task IDs
     
     Args:
         farm_id: The ID of the farm
         queue_id: The ID of the queue
         job_id: The ID of the job
-        step_id: The ID of the step
-        task_id: The ID of the task
+        step_id: The ID of the step (format: step-[32 hex chars])
+        task_id: The ID of the task (format: task-[32 hex chars]-[number])
         
     Returns:
         String containing detailed task information or error message
     """
+    from strands import ToolContext
+    
+    # Validate step_id format
+    is_valid, error_msg = validate_deadline_id(step_id, 'step')
+    if not is_valid:
+        return format_tool_error(
+            Exception(error_msg),
+            context="getting task details"
+        )
+    
+    # Validate task_id format
+    is_valid, error_msg = validate_deadline_id(task_id, 'task')
+    if not is_valid:
+        return format_tool_error(
+            Exception(error_msg),
+            context="getting task details"
+        )
+    
+    # Check if step_id was discovered by list_deadline_steps
+    if tool_context and isinstance(tool_context, ToolContext):
+        discovered_steps = tool_context.agent.state.get("discovered_steps") or []
+        if discovered_steps and step_id not in discovered_steps:
+            return format_tool_error(
+                Exception(
+                    f"Step ID {step_id} was not found in discovered steps.\n\n"
+                    f"**Available step IDs:**\n" + "\n".join(f"- {sid}" for sid in discovered_steps) + "\n\n"
+                    f"**You must use one of the step IDs from list_deadline_steps.**\n"
+                    f"If you need to find steps, call list_deadline_steps first."
+                ),
+                context="getting task details - step not in discovered list"
+            )
+        
+        # Check if task_id was discovered by list_deadline_tasks
+        discovered_tasks = tool_context.agent.state.get("discovered_tasks") or []
+        if discovered_tasks and task_id not in discovered_tasks:
+            return format_tool_error(
+                Exception(
+                    f"Task ID {task_id} was not found in discovered tasks.\n\n"
+                    f"**Available task IDs:**\n" + "\n".join(f"- {tid}" for tid in discovered_tasks[:10]) + 
+                    (f"\n... and {len(discovered_tasks) - 10} more" if len(discovered_tasks) > 10 else "") + "\n\n"
+                    f"**You must use one of the task IDs from list_deadline_tasks.**\n"
+                    f"If you need to find tasks, call list_deadline_tasks first."
+                ),
+                context="getting task details - task not in discovered list"
+            )
     
     try:
         client = get_deadline_client()
@@ -676,10 +1045,12 @@ def get_deadline_task_details(farm_id: str, queue_id: str, job_id: str, step_id:
         return format_tool_error(e, context=f"getting details for task {task_id}")
 
 
-@tool
-def list_deadline_sessions(farm_id: str, queue_id: str, job_id: str, max_results: int = 20) -> str:
+@tool(context=True)
+def list_deadline_sessions(farm_id: str, queue_id: str, job_id: str, max_results: int = 20, tool_context=None) -> str:
     """
     List sessions for a specific Deadline Cloud job.
+    
+    This tool automatically tracks discovered session IDs in agent state for use by other tools.
     
     Args:
         farm_id: The ID of the farm
@@ -690,6 +1061,7 @@ def list_deadline_sessions(farm_id: str, queue_id: str, job_id: str, max_results
     Returns:
         String containing session information or error message
     """
+    from strands import ToolContext
     
     try:
         client = get_deadline_client()
@@ -703,6 +1075,16 @@ def list_deadline_sessions(farm_id: str, queue_id: str, job_id: str, max_results
         sessions = response.get('sessions', [])
         if not sessions:
             return f"No sessions found for job {job_id}."
+        
+        # Track discovered session IDs in agent state
+        if tool_context and isinstance(tool_context, ToolContext):
+            discovered_sessions = tool_context.agent.state.get("discovered_sessions") or []
+            for session in sessions:
+                session_id = session['sessionId']
+                if session_id not in discovered_sessions:
+                    discovered_sessions.append(session_id)
+            tool_context.agent.state.set("discovered_sessions", discovered_sessions)
+            logger.info(f"Tracked {len(sessions)} session IDs in agent state")
         
         result = f"Found {len(sessions)} session(s) for job {job_id}:\n\n"
         for session in sessions:
@@ -754,6 +1136,21 @@ def get_deadline_session_details(farm_id: str, queue_id: str, job_id: str, sessi
         String containing detailed session information or error message
     """
     
+    # Check for common hallucinated session ID pattern
+    if session_id == "session-00000000000000000000000000000000" or session_id.endswith("0" * 32):
+        return format_tool_error(
+            Exception(
+                "Invalid session ID detected: This appears to be a placeholder or hallucinated session ID.\n\n"
+                "**CRITICAL ERROR**: You MUST get real session IDs from the API.\n\n"
+                "To get valid session IDs:\n"
+                "1. Call list_deadline_sessions(farm_id, queue_id, job_id) first\n"
+                "2. Extract the sessionId values from the response\n"
+                "3. Use those real session IDs in this function\n\n"
+                "**DO NOT make up or guess session IDs**. They must come from the API."
+            ),
+            context="getting session details - invalid session ID"
+        )
+    
     # Validate session_id format
     is_valid, error_msg = validate_deadline_id(session_id, 'session')
     if not is_valid:
@@ -782,7 +1179,12 @@ def get_deadline_session_details(farm_id: str, queue_id: str, job_id: str, sessi
         if response.get('hostProperties'):
             result += f"\n**Host Properties:**\n"
             host = response['hostProperties']
-            result += f"- IP Address: {host.get('ipAddresses', {}).get('ipV4Addresses', ['N/A'])[0]}\n"
+            ip_addresses = host.get('ipAddresses', {})
+            if isinstance(ip_addresses, dict):
+                ipv4_list = ip_addresses.get('ipV4Addresses', ['N/A'])
+                result += f"- IP Address: {ipv4_list[0] if ipv4_list else 'N/A'}\n"
+            else:
+                result += f"- IP Addresses: {ip_addresses}\n"
             result += f"- Host Name: {host.get('hostName', 'N/A')}\n"
             result += f"- EC2 Instance ARN: {host.get('ec2InstanceArn', 'N/A')}\n"
         
@@ -815,8 +1217,8 @@ def get_deadline_session_details(farm_id: str, queue_id: str, job_id: str, sessi
         return format_tool_error(e, context=f"getting details for session {session_id}")
 
 
-@tool
-def list_deadline_session_actions(farm_id: str, queue_id: str, job_id: str, session_id: str, task_id: str = None, max_results: int = 20) -> str:
+@tool(context=True)
+def list_deadline_session_actions(farm_id: str, queue_id: str, job_id: str, session_id: str, task_id: str = None, max_results: int = 20, tool_context=None) -> str:
     """
     List session actions for a specific Deadline Cloud session.
     
@@ -838,6 +1240,22 @@ def list_deadline_session_actions(farm_id: str, queue_id: str, job_id: str, sess
     Returns:
         String containing session action information or error message
     """
+    from strands import ToolContext
+    
+    # Check for common hallucinated session ID pattern
+    if session_id == "session-00000000000000000000000000000000" or session_id.endswith("0" * 32):
+        return format_tool_error(
+            Exception(
+                "Invalid session ID detected: This appears to be a placeholder or hallucinated session ID.\n\n"
+                "**CRITICAL ERROR**: You MUST get real session IDs from the API.\n\n"
+                "To get valid session IDs:\n"
+                "1. Call list_deadline_sessions(farm_id, queue_id, job_id) first\n"
+                "2. Extract the sessionId values from the response\n"
+                "3. Use those real session IDs in this function\n\n"
+                "**DO NOT make up or guess session IDs**. They must come from the API."
+            ),
+            context="listing session actions - invalid session ID"
+        )
     
     # Validate session_id format (required)
     is_valid, error_msg = validate_deadline_id(session_id, 'session')
@@ -846,6 +1264,20 @@ def list_deadline_session_actions(farm_id: str, queue_id: str, job_id: str, sess
             Exception(error_msg),
             context="listing session actions"
         )
+    
+    # Check if session_id was discovered by list_deadline_sessions
+    if tool_context and isinstance(tool_context, ToolContext):
+        discovered_sessions = tool_context.agent.state.get("discovered_sessions") or []
+        if discovered_sessions and session_id not in discovered_sessions:
+            return format_tool_error(
+                Exception(
+                    f"Session ID {session_id} was not found in discovered sessions.\n\n"
+                    f"**Available session IDs:**\n" + "\n".join(f"- {sid}" for sid in discovered_sessions) + "\n\n"
+                    f"**You must use one of the session IDs from list_deadline_sessions.**\n"
+                    f"If you need to find sessions, call list_deadline_sessions first."
+                ),
+                context="listing session actions - session not in discovered list"
+            )
     
     # Validate task_id format if provided
     if task_id:
@@ -1059,6 +1491,190 @@ def get_deadline_session_action_details(farm_id: str, queue_id: str, job_id: str
         return format_tool_error(e, context=f"getting details for session action {session_action_id}")
 
 
+def get_queue_role_credentials(farm_id: str, queue_id: str, config: Optional[ConfigParser] = None):
+    """
+    Get temporary credentials by assuming the queue role for read access.
+    
+    This is a helper function that can be used by other tools/agents that need
+    to access AWS resources with queue role permissions (e.g., S3 job attachments bucket).
+    
+    Args:
+        farm_id: The farm ID
+        queue_id: The queue ID
+        config: Optional configuration parser
+        
+    Returns:
+        Dictionary with AWS credentials or None if failed
+    """
+    try:
+        from deadline.client.api import get_boto3_client
+        
+        # Get Deadline client using the package's credential system
+        deadline_client = get_boto3_client("deadline", config=config)
+        
+        logger.info(f"Assuming queue role for farm {farm_id}, queue {queue_id}")
+        
+        response = deadline_client.assume_queue_role_for_read(
+            farmId=farm_id,
+            queueId=queue_id
+        )
+        
+        creds = response.get('credentials', {})
+        logger.info("✅ Successfully assumed queue role")
+        
+        return {
+            'access_key_id': creds.get('accessKeyId'),
+            'secret_access_key': creds.get('secretAccessKey'),
+            'session_token': creds.get('sessionToken'),
+            'expiration': creds.get('expiration')
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to assume queue role: {e}")
+        return None
+
+
+@tool
+def get_queue_credentials(farm_id: str, queue_id: str) -> str:
+    """
+    Get temporary AWS credentials by assuming the queue role for read access.
+    
+    These credentials can be used to access AWS resources that the queue role has
+    permissions for, such as:
+    - S3 job attachments bucket
+    - CloudWatch logs for the queue
+    - Other queue-scoped AWS resources
+    
+    The credentials are temporary and will expire after a period of time.
+    
+    Args:
+        farm_id: The ID of the farm
+        queue_id: The ID of the queue
+        
+    Returns:
+        String containing credential information or error message
+    """
+    try:
+        creds = get_queue_role_credentials(farm_id, queue_id)
+        
+        if not creds:
+            return "❌ Failed to assume queue role. Check permissions and resource IDs."
+        
+        result = "**Queue Role Credentials**\n\n"
+        result += f"Access Key ID: {creds['access_key_id'][:20]}...\n"
+        result += f"Expiration: {creds['expiration']}\n\n"
+        result += "✓ Credentials obtained successfully\n\n"
+        result += "These credentials can be used to:\n"
+        result += "- Access the job attachments S3 bucket\n"
+        result += "- Read CloudWatch logs for this queue\n"
+        result += "- Access other queue-scoped AWS resources\n\n"
+        result += "💡 Use these credentials when accessing S3 or other AWS services on behalf of the queue.\n"
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting queue credentials: {e}")
+        return format_tool_error(e, context=f"getting queue credentials for queue {queue_id}")
+
+
+@tool
+def copy_job_template(
+    farm_id: str,
+    queue_id: str,
+    job_id: str,
+    s3_bucket: str,
+    s3_key_prefix: str = "deadline-job-templates/"
+) -> str:
+    """
+    Copy a job template to an S3 bucket for review and diagnosis.
+    
+    This tool exports the job template JSON to S3, allowing you to:
+    - Review the complete job configuration
+    - Diagnose rendering errors by examining template structure
+    - Identify misconfigurations in job parameters
+    
+    The template will be written to: s3://{bucket}/{prefix}{job_id}.json
+    
+    After reviewing, you can delete the object using standard S3 tools if permissions allow.
+    
+    Args:
+        farm_id: The ID of the farm
+        queue_id: The ID of the queue
+        job_id: The ID of the job
+        s3_bucket: The S3 bucket name to write the template to
+        s3_key_prefix: Optional S3 key prefix (default: "deadline-job-templates/")
+        
+    Returns:
+        String containing the S3 location and summary of the template, or error message
+    """
+    
+    try:
+        # Get the job details first to retrieve the template
+        deadline_client = get_deadline_client()
+        job_response = deadline_client.get_job(
+            farmId=farm_id,
+            queueId=queue_id,
+            jobId=job_id
+        )
+        
+        # Extract the job template
+        # The template is typically in the job parameters or attachments
+        template_data = {
+            "jobId": job_id,
+            "name": job_response.get("name"),
+            "lifecycleStatus": job_response.get("lifecycleStatus"),
+            "priority": job_response.get("priority"),
+            "parameters": job_response.get("parameters", {}),
+            "attachments": job_response.get("attachments", {}),
+            "description": job_response.get("description"),
+            "createdAt": str(job_response.get("createdAt")),
+            "createdBy": job_response.get("createdBy"),
+        }
+        
+        # Convert to JSON
+        import json
+        template_json = json.dumps(template_data, indent=2, default=str)
+        
+        # Write to S3 using the same session as deadline client
+        from deadline.client.api import get_boto3_session
+        session = get_boto3_session()
+        s3_client = session.client('s3')
+        s3_key = f"{s3_key_prefix}{job_id}.json"
+        
+        s3_client.put_object(
+            Bucket=s3_bucket,
+            Key=s3_key,
+            Body=template_json.encode('utf-8'),
+            ContentType='application/json'
+        )
+        
+        s3_location = f"s3://{s3_bucket}/{s3_key}"
+        
+        result = f"**Job Template Exported Successfully**\n\n"
+        result += f"Location: {s3_location}\n"
+        result += f"Job Name: {template_data.get('name', 'N/A')}\n"
+        result += f"Status: {template_data.get('lifecycleStatus', 'N/A')}\n"
+        result += f"Priority: {template_data.get('priority', 'N/A')}\n\n"
+        
+        # Provide summary of parameters
+        params = template_data.get('parameters', {})
+        if params:
+            result += f"**Parameters ({len(params)} total):**\n"
+            for key in list(params.keys())[:5]:  # Show first 5
+                result += f"- {key}\n"
+            if len(params) > 5:
+                result += f"- ... and {len(params) - 5} more\n"
+        
+        result += f"\n💡 Review the template at {s3_location}\n"
+        result += f"💡 To delete after review: aws s3 rm {s3_location}\n"
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Error copying job template: {e}")
+        return format_tool_error(e, context=f"copying job template for job {job_id} to S3")
+
+
 def get_deadline_tools():
     """
     Get all custom Deadline Cloud tools.
@@ -1072,9 +1688,11 @@ def get_deadline_tools():
     
     return [
         # Farm and Queue tools
-        list_deadline_farms,
         list_deadline_queues,
-        list_deadline_fleets,
+        get_queue_details,
+        list_queue_environments,
+        get_queue_environment,
+        get_fleet_details,
         
         # Queue-Fleet Association tools
         list_queue_fleet_associations,
@@ -1083,6 +1701,7 @@ def get_deadline_tools():
         # Job tools
         list_deadline_jobs,
         get_deadline_job_details,
+        copy_job_template,
         
         # Step tools
         list_deadline_steps,
@@ -1102,4 +1721,7 @@ def get_deadline_tools():
         
         # Worker tools
         get_deadline_worker_details,
+        
+        # Credentials tools
+        get_queue_credentials,
     ]

@@ -11,34 +11,30 @@ Your role is to analyze the issue description and classify the most probable sou
 
 ## Classification Categories
 
-Return the top THREE most probable issue sources, in order of likelihood:
+Return the top TWO most probable issue sources, in order of confidence:
 
-a) **Account permissions-related (IAM or SSO)**: Missing IAM roles, incorrect policies, SSO configuration issues
-b) **Service limits**: Quota exhaustion, throttling, resource limits reached
-c) **Job execution errors**: Task failures, rendering errors, application crashes
-d) **Network configuration and/or security groups issues**: VPC misconfiguration, security group rules, connectivity problems
-e) **Job attachments (S3) bucket permissions and accessibility**: S3 bucket access denied, missing permissions, bucket policy issues
-f) **Fleet configuration/scaling settings**: No fleet associated, insufficient capacity, auto-scaling misconfigured
-g) **General service questions**: User may just want guidance on fixing an issue after the issue has been identified. 
+a) **Job execution errors**: Task failures, rendering errors, application crashes
+b) **Resource (queue or fleet) configuration/scaling settings**: No fleet associated, insufficient capacity, auto-scaling misconfigured
+c) **General service questions**: User may just want guidance on fixing an issue after the issue has been identified. 
+d) **Service limits**: Quota exhaustion, throttling, resource limits reached
+e) **Network configuration and/or security groups issues**: VPC misconfiguration, security group rules, connectivity problems
+f) **Account permissions-related (IAM or SSO)**: Missing IAM roles, incorrect policies, SSO configuration issues
 
 ## Common Deadline Cloud Issues
 
 The most frequent issues are:
 - **Resource configuration**: Farm, queue, fleet, or related resources are not configured properly.
-- **IAM Permission Problems**: Service roles, user permissions, cross-account access
-- **Fleet Management**: Worker scaling, instance types, spot vs on-demand
 - **Job Submission**: Queue configuration, priority settings, dependency management
+- **Fleet Management**: Worker scaling, instance types, spot vs on-demand
+- **General service questions**: General questions about the Deadline Cloud service, terminology, or other information available in documentation
+- **IAM Permission Problems**: Service roles, user permissions, cross-account access
 - **Storage Integration**: S3 bucket permissions, file transfer issues, asset management
 - **Network Configuration**: VPC settings, security groups, subnet configuration
 - **Cost Optimization**: Resource utilization, scaling policies, instance selection
-- **General service questions**: General questions about the Deadline Cloud service, terminology, or other information available in documentation
 
 ## Agents available for recommendation:
 - Job Troubleshooter (RECOMMENDED for job/task failures - follows systematic workflow including CloudWatch log analysis)
-- Fleet Configuration Agent (for fleet sizing, scaling, and queue association issues)
-- Job Attachments Agent (for S3 bucket permissions and accessibility)
-- Networking Agent (for VPC, security groups, and network configuration)
-- Knowledge Base Retriever (for historical context and similar issues)
+- Resource Configuration Agent (for fleet sizing, scaling, and queue association issues)
 
 ## Your Response Format
 
@@ -58,6 +54,7 @@ DO NOT add any additional text to your response, only this object.
 - If there are no high confidence classifications, return a request for additional information.
 - Consider the most common issues first
 - Be decisive but acknowledge uncertainty when appropriate
+- If no job id is provided, it is likely that it is a resource configuration issue
 """
 
 @tool

@@ -21,44 +21,8 @@ except ImportError:
     BOTO3_AVAILABLE = False
 
 
-def get_queue_role_credentials(farm_id: str, queue_id: str, config: Optional[ConfigParser] = None):
-    """
-    Get temporary credentials by assuming the queue role for read access.
-    
-    Args:
-        farm_id: The farm ID
-        queue_id: The queue ID
-        config: Optional configuration parser
-        
-    Returns:
-        Dictionary with AWS credentials or None if failed
-    """
-    try:
-        from ...client.api import get_boto3_client
-        
-        # Get Deadline client using the package's credential system
-        deadline_client = get_boto3_client("deadline", config=config)
-        
-        logger.info(f"Assuming queue role for farm {farm_id}, queue {queue_id}")
-        
-        response = deadline_client.assume_queue_role_for_read(
-            farmId=farm_id,
-            queueId=queue_id
-        )
-        
-        creds = response.get('credentials', {})
-        logger.info("✅ Successfully assumed queue role")
-        
-        return {
-            'access_key_id': creds.get('accessKeyId'),
-            'secret_access_key': creds.get('secretAccessKey'),
-            'session_token': creds.get('sessionToken'),
-            'expiration': creds.get('expiration')
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to assume queue role: {e}")
-        return None
+# Import get_queue_role_credentials from deadline_tools to avoid duplication
+from .deadline_tools import get_queue_role_credentials
 
 
 def get_cloudwatch_client(farm_id: str = None, queue_id: str = None, config: Optional[ConfigParser] = None):
@@ -147,16 +111,6 @@ def get_cloudwatch_log_events(
         return "❌ boto3 not available. Install with: pip install boto3"
     
     try:
-        logger.info("=" * 80)
-        logger.info("GET_CLOUDWATCH_LOG_EVENTS CALLED")
-        logger.info("=" * 80)
-        logger.info(f"Log Group: {log_group_name}")
-        logger.info(f"Log Stream: {log_stream_name}")
-        logger.info(f"Farm ID: {farm_id}")
-        logger.info(f"Queue ID: {queue_id}")
-        logger.info(f"Max Events: {max_events}")
-        logger.info(f"Start From Head: {start_from_head}")
-        
         try:
             client = get_cloudwatch_client(farm_id=farm_id, queue_id=queue_id)
             
@@ -167,8 +121,6 @@ def get_cloudwatch_log_events(
                 session = get_boto3_session()
                 sts = session.client('sts')
                 identity = sts.get_caller_identity()
-                logger.info(f"CloudWatch client identity: {identity.get('Arn')}")
-                logger.info(f"Account: {identity.get('Account')}")
             except Exception as id_error:
                 logger.warning(f"Could not verify CloudWatch client identity: {id_error}")
                 

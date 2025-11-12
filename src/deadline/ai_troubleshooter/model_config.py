@@ -27,7 +27,7 @@ MODEL_IDS = {
     "classifier": "anthropic.claude-3-5-sonnet-20240620-v1:0",
     "job_troubleshooter": "anthropic.claude-3-5-sonnet-20240620-v1:0",
     "iam_validator": "anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "fleet_configuration": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "resource_configuration": "anthropic.claude-3-5-sonnet-20240620-v1:0",
     "job_attachments": "anthropic.claude-3-5-sonnet-20240620-v1:0",
     "kb_retriever": "anthropic.claude-3-5-sonnet-20240620-v1:0",
     "default": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -50,7 +50,7 @@ MODEL_PARAMS = {
     "job_troubleshooter": {
         "streaming": False,  # Sub-agents should not stream when used as tools
         "top_p": 0.9,
-        "max_tokens": 2000,  # Reduced from 4000 for faster analysis
+        "max_tokens": 10000,
         "temperature": 0.3,  # Lower temp for more focused analysis
     },
     "iam_validator": {
@@ -59,7 +59,7 @@ MODEL_PARAMS = {
         "max_tokens": 2000,
         "temperature": 0.7,
     },
-    "fleet_configuration": {
+    "resource_configuration": {
         "streaming": False,
         "top_p": 1,
         "max_tokens": 500,
@@ -71,6 +71,7 @@ MODEL_PARAMS = {
         "max_tokens": 2000,
         "temperature": 0.7,
     },
+    # not currently implemented
     "kb_retriever": {
         "streaming": False,
         "top_p": 1,
@@ -115,7 +116,7 @@ orchestrator_model = get_model("orchestrator")
 classifier_model = get_model("classifier")
 job_troubleshooter_model = get_model("job_troubleshooter")
 iam_validator_model = get_model("iam_validator")
-fleet_configuration_model = get_model("fleet_configuration")
+resource_configuration_model = get_model("resource_configuration")
 job_attachments_model = get_model("job_attachments")
 kb_retriever_model = get_model("kb_retriever")
 default_model = get_model("default")
