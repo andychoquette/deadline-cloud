@@ -6,7 +6,6 @@ Provides colored, markdown-formatted streaming output for each agent.
 """
 
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.text import Text
 import sys
 
@@ -77,66 +76,13 @@ def print_agent_text(agent_name: str, text: str, end: str = "", flush: bool = Tr
         console.file.flush()
 
 
-def print_agent_markdown(agent_name: str, markdown_text: str):
+def stream_agent_text(agent_name: str, text: str):
     """
-    Print markdown-formatted text with agent-specific color.
+    Stream a text chunk with agent-specific color.
 
     Args:
-        agent_name: Name of the agent
-        markdown_text: Markdown text to render
+        agent_name: Name of the agent for color coding
+        text: Text chunk to stream
     """
-    console = get_agent_console(agent_name)
-    color = get_agent_color(agent_name)
-
-    # Create markdown object
-    md = Markdown(markdown_text, code_theme="monokai")
-
-    # Print with agent color
-    console.print(md, style=color)
-
-
-def print_tool_invocation(tool_name: str, details: str = ""):
-    """
-    Print a tool invocation message in a subtle style.
-
-    Args:
-        tool_name: Name of the tool being invoked
-        details: Optional details about the invocation
-    """
-    console = Console(file=sys.stderr, force_terminal=True)
-    message = f"  → {tool_name}"
-    if details:
-        message += f": {details}"
-    console.print(message, style="dim cyan")
-
-
-class AgentStreamBuffer:
-    """
-    Buffer for accumulating streamed text with real-time colored output.
-    """
-
-    def __init__(self, agent_name: str):
-        self.agent_name = agent_name
-        self.buffer = []
-        self.color = get_agent_color(agent_name)
-        self.console = get_agent_console(agent_name)
-
-    def add_chunk(self, text: str):
-        """Add a text chunk and print it immediately with agent color."""
-        if text:
-            self.buffer.append(text)
-            # Print chunk immediately with color for real-time streaming
-            print_agent_text(self.agent_name, text, end="", flush=True)
-
-    def get_full_text(self) -> str:
-        """Get the complete buffered text."""
-        return "".join(self.buffer)
-
-    def clear(self):
-        """Clear the buffer."""
-        self.buffer.clear()
-
-
-def print_agent_separator():
-    """Print a visual separator between agent outputs."""
-    print()  # Just a newline for separation
+    if text:
+        print_agent_text(agent_name, text, end="", flush=True)

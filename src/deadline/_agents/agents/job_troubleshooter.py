@@ -17,7 +17,6 @@ from strands import Agent, tool
 from deadline._agents.bin.model_config import get_job_troubleshooter_model
 from deadline._agents.tools.deadline_tools import get_deadline_tools
 from deadline._agents.tools.cloudwatch_tools import get_cloudwatch_tools
-from deadline._agents.bin.rich_console import AgentStreamBuffer, print_tool_invocation
 
 JOB_TROUBLESHOOTER_SYSTEM_PROMPT = """
 You are a specialized Job Troubleshooter for AWS Deadline Cloud.
@@ -328,26 +327,19 @@ def job_troubleshooter_agent(query: str) -> str:
 
         boto_session = get_boto3_session()
 
-        # Create callback handler to stream text in real-time with rich styling
-        from deadline._agents.bin.rich_console import print_agent_separator
+        # Create callback handler with streaming and tool logging
+        from deadline._agents.orchestrator import sub_agent_streaming_callback_handler
+
+        # Get the base streaming callback
+        streaming_callback = sub_agent_streaming_callback_handler("job_troubleshooter")
 
         # Track logged tools to avoid duplicates (use a set to store tool_use_id)
         logged_tools = set()
-        stream_buffer = AgentStreamBuffer("job_troubleshooter")
-        first_chunk = True
 
         def troubleshooter_callback(**kwargs):
-            """Stream text output in real-time with agent-specific colors."""
-            nonlocal first_chunk
-            # Stream text chunks in real-time with agent-specific color
-            if "data" in kwargs:
-                text_chunk = kwargs["data"]
-                if text_chunk:
-                    # Add newline before first chunk for visual separation
-                    if first_chunk:
-                        print_agent_separator()
-                        first_chunk = False
-                    stream_buffer.add_chunk(text_chunk)
+            """Stream text output and log tool invocations."""
+            # Handle streaming via shared callback
+            streaming_callback(**kwargs)
 
             # Log tool invocations only once per tool call
             # Use tool_use_id to track unique invocations
@@ -365,43 +357,36 @@ def job_troubleshooter_agent(query: str) -> str:
                     if not isinstance(tool_input, dict):
                         tool_input = {}
 
-                    # Log tool calls with key parameters using rich styling
+                    # Log tool calls with key parameters
                     if tool_name == "get_deadline_job_details":
                         job_id = tool_input.get("job_id", "?")
                         logger.info(f"  → Calling: get_deadline_job_details(job_id={job_id})")
-                        print_tool_invocation("get_deadline_job_details", f"job_id={job_id}")
                     elif tool_name == "list_deadline_tasks":
                         job_id = tool_input.get("job_id", "?")
                         status = tool_input.get("status_filter", "all")
                         logger.info(
                             f"  → Calling: list_deadline_tasks(job_id={job_id}, status={status})"
                         )
-                        print_tool_invocation("list_deadline_tasks", f"status={status}")
                     elif tool_name == "list_deadline_sessions":
                         job_id = tool_input.get("job_id", "?")
                         logger.info(f"  → Calling: list_deadline_sessions(job_id={job_id})")
-                        print_tool_invocation("list_deadline_sessions", "for job")
                     elif tool_name == "list_deadline_session_actions":
                         session_id = tool_input.get("session_id", "?")
                         logger.info(
                             f"  → Calling: list_deadline_session_actions(session_id={session_id})"
                         )
-                        print_tool_invocation("list_deadline_session_actions")
                     elif tool_name == "get_deadline_session_details":
                         session_id = tool_input.get("session_id", "?")
                         logger.info(
                             f"  → Calling: get_deadline_session_details(session_id={session_id})"
                         )
-                        print_tool_invocation("get_deadline_session_details")
                     elif tool_name == "get_cloudwatch_log_events":
                         log_stream = tool_input.get("log_stream_name", "?")
                         logger.info(
                             f"  → Calling: get_cloudwatch_log_events(log_stream={log_stream})"
                         )
-                        print_tool_invocation("get_cloudwatch_log_events", f"stream={log_stream}")
                     else:
                         logger.info(f"  → Calling: {tool_name}")
-                        print_tool_invocation(tool_name)
 
         # Create the job troubleshooter agent with all necessary tools
         troubleshooter = Agent(

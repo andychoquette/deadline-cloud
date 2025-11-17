@@ -6,7 +6,7 @@ from deadline._agents.agents.classifier import classifier_agent
 from deadline._agents.agents.job_troubleshooter import job_troubleshooter_agent
 from deadline._agents.agents.farm_setup_agent import farm_setup_agent
 from deadline._agents.agents.job_attachments_agent import job_attachments_agent
-from deadline._agents.bin.rich_console import AgentStreamBuffer, print_tool_invocation
+from deadline._agents.bin.rich_console import stream_agent_text
 from strands import Agent
 from strands.tools.mcp import MCPClient
 from mcp import stdio_client, StdioServerParameters
@@ -294,7 +294,6 @@ def troubleshooter_callback_handler(**kwargs):
         tool_result = kwargs["tool_result"]
         tool_name = tool_result.get("name", "")
 
-        print_tool_invocation(tool_name)
         # Log all tool calls for debugging
         logger.debug(f"Tool call: {tool_name}")
 
@@ -309,18 +308,23 @@ def sub_agent_streaming_callback_handler(agent_name: str = "default"):
     Returns:
         Callback handler function
     """
-    stream_buffer = AgentStreamBuffer(agent_name)
+    first_chunk = True
 
     def callback(**kwargs):
         """
         Streaming callback handler for sub-agents.
         Streams text output in real-time with agent-specific colors.
         """
+        nonlocal first_chunk
         # Stream text chunks from sub-agents
         if "data" in kwargs:
             text_chunk = kwargs["data"]
             if text_chunk:
-                stream_buffer.add_chunk(text_chunk)
+                # Add newline before first chunk for visual separation
+                if first_chunk:
+                    print()
+                    first_chunk = False
+                stream_agent_text(agent_name, text_chunk)
 
     return callback
 
@@ -432,7 +436,6 @@ What would you like help with?"""
 
     try:
         result_text = ""
-        stream_buffer = AgentStreamBuffer("orchestrator")
 
         # Pass resource IDs via invocation state (per-request context)
         stream = orchestrator.stream_async(
@@ -451,7 +454,7 @@ What would you like help with?"""
             if isinstance(event, dict) and "data" in event:
                 text_chunk = event["data"]
                 if text_chunk:
-                    stream_buffer.add_chunk(text_chunk)
+                    stream_agent_text("orchestrator", text_chunk)
                     result_text += text_chunk
 
         print()  # Final newline after streaming completes

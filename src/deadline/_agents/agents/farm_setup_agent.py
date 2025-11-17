@@ -7,7 +7,7 @@ Fleet Configuration Agent - Validates Deadline Cloud fleet configuration and ide
 from deadline.client.api import get_boto3_client
 from strands import Agent, tool
 from deadline._agents.bin.model_config import get_farm_setup_model
-from deadline._agents.bin.rich_console import AgentStreamBuffer
+
 
 FARM_CONFIGURATION_AGENT_SYSTEM_PROMPT = """
 You are a resource configuration specialist for AWS Deadline Cloud.
@@ -413,25 +413,9 @@ def farm_setup_agent(query: str) -> str:
     try:
         # Get model with the same boto_session used by other components
         from deadline.client.api import get_boto3_session
+        from deadline._agents.orchestrator import sub_agent_streaming_callback_handler
 
         boto_session = get_boto3_session()
-
-        # Stream output in real-time with rich styling
-        from deadline._agents.bin.rich_console import print_agent_separator
-
-        stream_buffer = AgentStreamBuffer("farm_setup")
-        first_chunk = True
-
-        def streaming_callback(**kwargs):
-            nonlocal first_chunk
-            if "data" in kwargs:
-                text_chunk = kwargs["data"]
-                if text_chunk:
-                    # Add newline before first chunk for visual separation
-                    if first_chunk:
-                        print_agent_separator()
-                        first_chunk = False
-                    stream_buffer.add_chunk(text_chunk)
 
         fleet_agent = Agent(
             system_prompt=FARM_CONFIGURATION_AGENT_SYSTEM_PROMPT,
@@ -443,7 +427,7 @@ def farm_setup_agent(query: str) -> str:
                 check_fleet_workers,
                 validate_fleet_configuration,
             ],
-            callback_handler=streaming_callback,
+            callback_handler=sub_agent_streaming_callback_handler("Farm Setup Agent"),
         )
 
         response = fleet_agent(query)

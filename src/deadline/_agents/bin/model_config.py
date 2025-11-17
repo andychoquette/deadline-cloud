@@ -29,10 +29,8 @@ MODEL_IDS = {
     "orchestrator": "anthropic.claude-3-5-sonnet-20240620-v1:0",
     "classifier": "anthropic.claude-3-5-sonnet-20240620-v1:0",
     "job_troubleshooter": "anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "iam_validator": "anthropic.claude-3-5-sonnet-20240620-v1:0",
     "farm_setup": "anthropic.claude-3-5-sonnet-20240620-v1:0",
     "job_attachments": "anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "kb_retriever": "anthropic.claude-3-5-sonnet-20240620-v1:0",
     "default": "anthropic.claude-3-5-sonnet-20240620-v1:0",
 }
 
@@ -102,7 +100,7 @@ def get_model(agent_name: str = "default", boto_session=None) -> BedrockModel:
     Get a configured BedrockModel for a specific agent.
 
     Args:
-        agent_name: Name of the agent (orchestrator, kb_retriever, etc.)
+        agent_name: Name of the agent (orchestrator, etc.)
         boto_session: Optional boto3 session to use for the model
 
     Returns:
@@ -144,20 +142,12 @@ def get_job_troubleshooter_model(boto_session=None):
     return get_model("job_troubleshooter", boto_session=boto_session)
 
 
-def get_iam_validator_model(boto_session=None):
-    return get_model("iam_validator", boto_session=boto_session)
-
-
 def get_farm_setup_model(boto_session=None):
     return get_model("farm_setup", boto_session=boto_session)
 
 
 def get_job_attachments_model(boto_session=None):
     return get_model("job_attachments", boto_session=boto_session)
-
-
-def get_kb_retriever_model(boto_session=None):
-    return get_model("kb_retriever", boto_session=boto_session)
 
 
 def get_default_model(boto_session=None):

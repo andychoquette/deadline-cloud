@@ -9,7 +9,7 @@ from deadline.client.api import get_boto3_client
 from deadline._agents.tools.deadline_tools import get_queue_role_credentials, get_queue_details
 from strands import Agent, tool
 from deadline._agents.bin.model_config import get_job_attachments_model
-from deadline._agents.bin.rich_console import AgentStreamBuffer
+
 import logging
 
 logger = logging.getLogger(__name__)
@@ -613,22 +613,7 @@ def job_attachments_agent(query: str, farm_id: str = None, queue_id: str = None)
             )
             system_prompt += "=" * 80 + "\n"
 
-        # Stream output in real-time with rich styling
-        from deadline._agents.bin.rich_console import print_agent_separator
-
-        stream_buffer = AgentStreamBuffer("job_attachments")
-        first_chunk = True
-
-        def streaming_callback(**kwargs):
-            nonlocal first_chunk
-            if "data" in kwargs:
-                text_chunk = kwargs["data"]
-                if text_chunk:
-                    # Add newline before first chunk for visual separation
-                    if first_chunk:
-                        print_agent_separator()
-                        first_chunk = False
-                    stream_buffer.add_chunk(text_chunk)
+        from deadline._agents.orchestrator import sub_agent_streaming_callback_handler
 
         attachments_agent = Agent(
             system_prompt=system_prompt,
@@ -642,7 +627,7 @@ def job_attachments_agent(query: str, farm_id: str = None, queue_id: str = None)
                 get_bucket_versioning,
                 list_bucket_objects,
             ],
-            callback_handler=streaming_callback,
+            callback_handler=sub_agent_streaming_callback_handler("Job Attachments Agent"),
         )
 
         response = attachments_agent(query)
