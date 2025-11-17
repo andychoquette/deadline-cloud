@@ -71,6 +71,13 @@ You have access to specialized agents that handle all the complexity:
 - **job_attachments_agent**: S3 bucket permission validation
 - **AWS Documentation MCP**: Search AWS docs and get error explanations (optional, use if needed)
 
+You also have access to these Deadline tools for answering follow-up questions:
+- **get_deadline_job_details**: Get detailed information about a specific job (status, parameters, task counts)
+- **copy_job_template**: Export a job template to S3 for review and validation
+- **validate_job_template**: Validate a job template from S3 using openjd-cli
+
+Use these tools when users ask follow-up questions about job details or want to review/validate job templates.
+
 ## Troubleshooting Workflow
 
 ### 1. CLASSIFY THE ISSUE
@@ -399,8 +406,18 @@ async def run_diagnostics(
         "task_to_session_map": {},
     }
 
-    # Build tools list - only agent tools (agents have their own Deadline/CloudWatch tools)
+    # Build tools list - agent tools plus selected Deadline tools for follow-up questions
     all_tools = agent_tools
+
+    # Add specific Deadline tools for follow-up questions about diagnosis
+    # These allow the orchestrator to answer questions about job details and templates
+    from deadline._agents.tools.deadline_tools import (
+        get_deadline_job_details,
+        copy_job_template,
+        validate_job_template,
+    )
+
+    all_tools.extend([get_deadline_job_details, copy_job_template, validate_job_template])
 
     # Add AWS docs MCP if available (optional for documentation lookup)
     if aws_docs_mcp:

@@ -15,7 +15,7 @@ from .._main import deadline as main
 @_handle_error
 def cli_agents():
     """
-    Commands to troubleshoot Deadline Cloud jobs using AI agents.
+    Commands to invoke specialized Deadline agents
     """
 
 
@@ -51,6 +51,10 @@ def agents_diagnose(
 
     Use --model-id to override the default model for all agents. This is useful for
     testing different models or using newer model versions.
+
+    Use --job-template-bucket-arn to provide an S3 bucket where the agent can store
+    the current job template for diagnosis. To use this correctly, your role must have 
+    read and write object permissions for the specified bucket.
     """
     try:
         from ...._agents import run_diagnostics

@@ -60,7 +60,7 @@ mcp = [
   "mcp >= 1.13.0",
 ]
 
-ai_troubleshooter = [
+agents = [
   "strands-agents >= 1.15.0",
   "mcp >= 1.13.0",
   "openjd-cli >= 0.7.3",
