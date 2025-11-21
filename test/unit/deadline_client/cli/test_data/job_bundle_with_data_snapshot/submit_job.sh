@@ -14,8 +14,8 @@ aws s3 cp \
     s3://deadline-job-attachments-mock-bucket/MockRootPrefix/Manifests
 
 aws deadline create-job \
-    --farm-id farm-0123456789abcdefabcdefabcdefabcd \
-    --queue-id queue-0123456789abcdefabcdefabcdefabcd \
+    --farm-id farm-test123 \
+    --queue-id queue-test456 \
     --template file://template_param.data \
     --template-type YAML \
     --priority 50 \

@@ -1,7 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-MOCK_FARM_ID = "farm-0123456789abcdefabcdefabcdefabcd"
-MOCK_QUEUE_ID = "queue-0123456789abcdefabcdefabcdefabcd"
+MOCK_FARM_ID = "farm-test123"
+MOCK_QUEUE_ID = "queue-test456"
 MOCK_FLEET_ID = "fleet-7371eafb4bc74c7485c1138947bbe4e6"
 MOCK_WORKER_ID = "worker-aaca38a11996485f81d7f819c4f41f2b"
 MOCK_BUCKET_NAME = "deadline-job-attachments-mock-bucket"
