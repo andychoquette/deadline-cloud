@@ -1,0 +1,144 @@
+name: MCP Server Deploy
+
+on:
+  push:
+    branches: [mainline, chore/investigate-mcp-proxy]
+    paths:
+      - "src/deadline/_mcp/**"
+      - "infra/**"
+      - ".github/workflows/mcp_server_deploy.yml"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Deployment stage"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-west-2
+
+jobs:
+  build-and-push:
+    name: Build & Push Container Image
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      ecr-repo: ${{ steps.login-ecr.outputs.registry }}/deadline-mcp-server-${{ github.event.inputs.stage || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.MCP_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/deadline-mcp-server-${{ github.event.inputs.stage || 'staging' }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-infra:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: infra/package-lock.json
+
+      - name: Install CDK dependencies
+        working-directory: infra
+        run: npm ci
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.MCP_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: CDK Deploy
+        working-directory: infra
+        run: |
+          npx cdk deploy \
+            --context stage=${{ github.event.inputs.stage || 'staging' }} \
+            --require-approval never \
+            --outputs-file cdk-outputs.json
+
+      - name: Update ECS service
+        run: |
+          aws ecs update-service \
+            --cluster deadline-mcp-${{ github.event.inputs.stage || 'staging' }} \
+            --service $(aws ecs list-services --cluster deadline-mcp-${{ github.event.inputs.stage || 'staging' }} --query 'serviceArns[0]' --output text | xargs basename) \
+            --force-new-deployment
+
+      - name: Upload CDK outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdk-outputs
+          path: infra/cdk-outputs.json
+
+  smoke-test:
+    name: Smoke Test
+    runs-on: ubuntu-latest
+    needs: deploy-infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download CDK outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: cdk-outputs
+
+      - name: Wait for service stability
+        run: sleep 60
+
+      - name: Health check
+        run: |
+          ENDPOINT=$(jq -r '.[].McpApiEndpoint' cdk-outputs.json)
+          echo "Testing endpoint: ${ENDPOINT}/health"
+
+          for i in {1..5}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${ENDPOINT}/health" || true)
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check passed"
+              exit 0
+            fi
+            echo "Attempt $i: got status $STATUS, retrying..."
+            sleep 10
+          done
+
+          echo "Health check failed after 5 attempts"
+          exit 1

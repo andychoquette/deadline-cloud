@@ -1,0 +1,7 @@
+{
+  "app": "npx ts-node bin/app.ts",
+  "context": {
+    "@aws-cdk/aws-ecs:enableExecuteCommand": true,
+    "@aws-cdk/core:stackRelativeExports": true
+  }
+}

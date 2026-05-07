@@ -70,5 +70,152 @@ app = FastMCP("deadline-cloud", instructions=INSTRUCTIONS)
 register_api_tools(app, prefix="deadline_")
 
 
-def main():
-    app.run()
+def main(
+    transport: str = "stdio",
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    auth_mode: str = "local",
+):
+    """Start the MCP server with the specified transport and auth configuration.
+
+    Args:
+        transport: 'stdio' for local clients, 'streamable-http' for remote hosting.
+        host: Bind address for HTTP transport.
+        port: Bind port for HTTP transport.
+        auth_mode: 'local' uses ~/.deadline/config, 'oauth-delegation' for remote per-user auth.
+    """
+    if auth_mode == "oauth-delegation":
+        _configure_oauth_delegation()
+
+    if transport == "stdio":
+        app.run()
+    elif transport == "streamable-http":
+        if auth_mode == "oauth-delegation":
+            _run_with_oauth_middleware(host, port)
+        else:
+            app.run(transport="streamable-http", host=host, port=port)
+
+
+def _configure_oauth_delegation():
+    """Configure the server for OAuth-based credential delegation.
+
+    Installs the middleware that patches boto3 session creation to use
+    per-request delegated credentials.
+    """
+    import os
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    required_vars = ["IDC_ISSUER_URL", "DELEGATION_ROLE_ARN"]
+    missing = [v for v in required_vars if not os.environ.get(v)]
+    if missing:
+        logger.warning(
+            f"OAuth delegation mode requires environment variables: {missing}. "
+            "Falling back to local credential mode."
+        )
+        return
+
+    from .middleware import install_delegation_middleware
+
+    install_delegation_middleware()
+
+    logger.info(
+        "MCP server configured for OAuth credential delegation. "
+        f"Issuer: {os.environ['IDC_ISSUER_URL']}"
+    )
+
+
+def _run_with_oauth_middleware(host: str, port: int):
+    """Run the MCP server with an ASGI wrapper that handles OAuth token extraction.
+
+    Wraps the FastMCP streamable-http server with middleware that:
+    1. Extracts Bearer tokens from the Authorization header
+    2. Exchanges them for per-user AWS credentials
+    3. Sets thread-local credentials before each tool invocation
+    4. Returns 401 if no valid token is provided
+    """
+    import logging
+    from starlette.applications import Starlette
+    from starlette.middleware import Middleware
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+
+    from .auth import (
+        AuthenticationError,
+        CredentialDelegationError,
+        OAuthCredentialDelegator,
+        set_request_credentials,
+        clear_request_credentials,
+    )
+
+    logger = logging.getLogger(__name__)
+    delegator = OAuthCredentialDelegator()
+
+    class OAuthMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            # Health check endpoint doesn't require auth
+            if request.url.path == "/health":
+                return JSONResponse({"status": "ok"})
+
+            # Extract Bearer token
+            auth_header = request.headers.get("authorization", "")
+            if not auth_header.startswith("Bearer "):
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "error": "missing_token",
+                        "error_description": "Authorization header with Bearer token required",
+                    },
+                    headers={"WWW-Authenticate": 'Bearer realm="deadline-mcp"'},
+                )
+
+            token = auth_header[7:]  # Strip "Bearer " prefix
+
+            try:
+                creds = delegator.exchange_token(token)
+                set_request_credentials(creds)
+            except AuthenticationError as e:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_token", "error_description": str(e)},
+                    headers={"WWW-Authenticate": 'Bearer realm="deadline-mcp"'},
+                )
+            except CredentialDelegationError as e:
+                logger.error(f"Credential delegation failed: {e}")
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "delegation_error",
+                        "error_description": "Failed to obtain credentials. Please try again.",
+                    },
+                )
+
+            try:
+                response = await call_next(request)
+                return response
+            finally:
+                clear_request_credentials()
+
+    # Get the underlying ASGI app from FastMCP's streamable-http transport
+    mcp_app = app.streamable_http_app()
+
+    # Wrap with OAuth middleware
+    from starlette.routing import Mount, Route
+
+    async def health_handler(request: Request):
+        return JSONResponse({"status": "ok"})
+
+    wrapped_app = Starlette(
+        routes=[
+            Route("/health", health_handler, methods=["GET"]),
+            Mount("/", app=mcp_app),
+        ],
+        middleware=[Middleware(OAuthMiddleware)],
+    )
+
+    import uvicorn
+
+    logger.info(f"Starting MCP server with OAuth on {host}:{port}")
+    uvicorn.run(wrapped_app, host=host, port=port)

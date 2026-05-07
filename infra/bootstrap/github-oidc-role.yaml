@@ -1,0 +1,154 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  IAM role for GitHub Actions to deploy the Deadline Cloud MCP Server.
+  Trusted by the GitHub OIDC provider, scoped to the specific repository and branch.
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Default: andychoquette
+    Description: GitHub organization or username
+  GitHubRepo:
+    Type: String
+    Default: deadline-cloud
+    Description: GitHub repository name
+  GitHubBranch:
+    Type: String
+    Default: "*"
+    Description: Branch filter (* for any branch, or specific like refs/heads/mainline)
+  OIDCProviderArn:
+    Type: String
+    Description: ARN of the GitHub OIDC provider in this account
+    Default: ""
+
+Conditions:
+  CreateOIDCProvider: !Equals [!Ref OIDCProviderArn, ""]
+
+Resources:
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: DeadlineMcpGitHubDeploy
+      Description: Allows GitHub Actions to deploy the Deadline Cloud MCP Server infrastructure
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateOIDCProvider
+                - !Ref GitHubOIDCProvider
+                - !Ref OIDCProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOrg}/${GitHubRepo}:ref:${GitHubBranch}"
+      Policies:
+        - PolicyName: McpServerDeploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # CDK deployment (CloudFormation)
+              - Effect: Allow
+                Action:
+                  - cloudformation:*
+                Resource:
+                  - !Sub "arn:aws:cloudformation:*:${AWS::AccountId}:stack/DeadlineMcpServer-*"
+                  - !Sub "arn:aws:cloudformation:*:${AWS::AccountId}:stack/CDKToolkit/*"
+              # CDK asset bucket
+              - Effect: Allow
+                Action:
+                  - s3:*
+                Resource:
+                  - !Sub "arn:aws:s3:::cdk-*-assets-${AWS::AccountId}-*"
+                  - !Sub "arn:aws:s3:::cdk-*-assets-${AWS::AccountId}-*/*"
+              # ECR (push container images)
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeRepositories
+                  - ecr:CreateRepository
+                  - ecr:SetRepositoryPolicy
+                  - ecr:GetRepositoryPolicy
+                  - ecr:DeleteLifecyclePolicy
+                  - ecr:PutLifecyclePolicy
+                Resource:
+                  - !Sub "arn:aws:ecr:*:${AWS::AccountId}:repository/deadline-mcp-server-*"
+              # ECS (update service)
+              - Effect: Allow
+                Action:
+                  - ecs:UpdateService
+                  - ecs:DescribeServices
+                  - ecs:ListServices
+                  - ecs:DescribeClusters
+                Resource: "*"
+                Condition:
+                  StringLike:
+                    ecs:cluster: !Sub "arn:aws:ecs:*:${AWS::AccountId}:cluster/deadline-mcp-*"
+              # IAM (CDK creates roles)
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:PassRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/DeadlineMcp*"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/DeadlineMcpServer-*"
+              # VPC, ECS, ELB, API Gateway, Logs (CDK creates these)
+              - Effect: Allow
+                Action:
+                  - ec2:*
+                  - elasticloadbalancing:*
+                  - apigateway:*
+                  - logs:*
+                  - lambda:*
+                Resource: "*"
+              # SSM for CDK bootstrapping
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                Resource:
+                  - !Sub "arn:aws:ssm:*:${AWS::AccountId}:parameter/cdk-bootstrap/*"
+
+Outputs:
+  RoleArn:
+    Description: ARN of the GitHub deploy role. Add this as MCP_DEPLOY_ROLE_ARN in GitHub repo secrets.
+    Value: !GetAtt GitHubDeployRole.Arn
+  RoleName:
+    Description: Name of the deploy role
+    Value: !Ref GitHubDeployRole

@@ -1,0 +1,28 @@
+{
+  "name": "deadline-cloud-mcp-server-infra",
+  "version": "0.1.0",
+  "description": "CDK infrastructure for the remote Deadline Cloud MCP Server",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "jest",
+    "cdk": "cdk",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write '**/*.ts'"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.0",
+    "aws-cdk": "^2.150.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.0",
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.150.0",
+    "constructs": "^10.3.0"
+  }
+}

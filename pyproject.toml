@@ -57,6 +57,8 @@ gui = [
 ]
 mcp = [
   "mcp >= 1.13.0",
+  "starlette >= 0.37.0",
+  "uvicorn >= 0.29.0",
 ]
 
 [project.scripts]
