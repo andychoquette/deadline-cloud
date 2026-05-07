@@ -123,7 +123,7 @@ export class McpServerStack extends cdk.Stack {
       healthCheck: {
         command: [
           "CMD-SHELL",
-          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/mcp')\" || exit 1",
+          "python -c \"import socket; s=socket.socket(); s.connect(('127.0.0.1',8000)); s.close()\" || exit 1",
         ],
         interval: cdk.Duration.seconds(30),
         timeout: cdk.Duration.seconds(5),
@@ -176,7 +176,7 @@ export class McpServerStack extends cdk.Stack {
         interval: cdk.Duration.seconds(30),
         healthyThresholdCount: 2,
         unhealthyThresholdCount: 3,
-        healthyHttpCodes: "200,405",
+        healthyHttpCodes: "200,401,405,406",
       },
       deregistrationDelay: cdk.Duration.seconds(30),
     });
