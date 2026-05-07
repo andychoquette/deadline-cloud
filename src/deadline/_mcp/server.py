@@ -93,7 +93,10 @@ def main(
         if auth_mode == "oauth-delegation":
             _run_with_oauth_middleware(host, port)
         else:
-            app.run(transport="streamable-http", host=host, port=port)
+            # FastMCP takes host/port as constructor settings
+            app.settings.host = host
+            app.settings.port = port
+            app.run(transport="streamable-http")
 
 
 def _configure_oauth_delegation():
