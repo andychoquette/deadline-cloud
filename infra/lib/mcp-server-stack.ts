@@ -123,7 +123,7 @@ export class McpServerStack extends cdk.Stack {
       healthCheck: {
         command: [
           "CMD-SHELL",
-          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/mcp')\" || exit 1",
         ],
         interval: cdk.Duration.seconds(30),
         timeout: cdk.Duration.seconds(5),
@@ -217,12 +217,13 @@ export class McpServerStack extends cdk.Stack {
       ),
     });
 
-    // Health check route (unauthenticated)
+    // OAuth routes (authorize, token, callback, register, metadata)
+    // FastMCP serves these under the root when auth is configured
     this.httpApi.addRoutes({
-      path: "/health",
-      methods: [apigwv2.HttpMethod.GET],
+      path: "/{proxy+}",
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
       integration: new apigwv2_integrations.HttpAlbIntegration(
-        "HealthIntegration",
+        "CatchAllIntegration",
         listener,
         { vpcLink }
       ),
