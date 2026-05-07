@@ -247,6 +247,18 @@ class AwsSignInOAuthProvider(OAuthAuthorizationServerProvider):
     async def load_access_token(self, token: str) -> Optional[StoredAccessToken]:
         stored = self._access_tokens.get(token)
         if stored and time.time() < stored.expires_at:
+            # Inject AWS credentials into thread-local for this request
+            from .auth import DelegatedCredentials, set_request_credentials
+
+            set_request_credentials(
+                DelegatedCredentials(
+                    access_key_id=stored.aws_access_key_id,
+                    secret_access_key=stored.aws_secret_access_key,
+                    session_token=stored.aws_session_token,
+                    expiration=str(stored.expires_at),
+                    user_id=stored.user_id,
+                )
+            )
             return stored
         if stored:
             del self._access_tokens[token]

@@ -89,17 +89,14 @@ def _create_app(auth_mode: str = "local", host: str = "127.0.0.1", port: int = 8
         from mcp.server.auth.settings import ClientRegistrationOptions
         from mcp.server.fastmcp.server import AuthSettings
         from .oauth_provider import AwsSignInOAuthProvider
-        from .token_verifier import AwsCredentialTokenVerifier
 
         server_url = os.environ.get(
             "MCP_SERVER_URL", "https://5grpve61a5.execute-api.us-west-2.amazonaws.com"
         )
 
         oauth_provider = AwsSignInOAuthProvider()
-        token_verifier = AwsCredentialTokenVerifier(oauth_provider)
 
         kwargs["auth_server_provider"] = oauth_provider
-        kwargs["token_verifier"] = token_verifier
         kwargs["auth"] = AuthSettings(
             issuer_url=server_url,
             resource_server_url=server_url,
