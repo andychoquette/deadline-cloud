@@ -65,7 +65,19 @@ This server uses the Deadline Cloud configuration from `~/.deadline/config`, NOT
 When asked about authentication or which profile/credentials are being used, refer to the Deadline Cloud config file (`~/.deadline/config`) and the `aws_profile_name` setting, not the standard AWS credential chain.
 """
 
-app = FastMCP("deadline-cloud", instructions=INSTRUCTIONS)
+import os
+
+_transport_security = None
+if os.environ.get("MCP_TRANSPORT") == "streamable-http":
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    _transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+app = FastMCP(
+    "deadline-cloud",
+    instructions=INSTRUCTIONS,
+    transport_security=_transport_security,
+)
 
 register_api_tools(app, prefix="deadline_")
 
@@ -93,7 +105,6 @@ def main(
         if auth_mode == "oauth-delegation":
             _run_with_oauth_middleware(host, port)
         else:
-            # FastMCP takes host/port as constructor settings
             app.settings.host = host
             app.settings.port = port
             app.run(transport="streamable-http")
@@ -221,4 +232,4 @@ def _run_with_oauth_middleware(host: str, port: int):
     import uvicorn
 
     logger.info(f"Starting MCP server with OAuth on {host}:{port}")
-    uvicorn.run(wrapped_app, host=host, port=port)
+    uvicorn.run(wrapped_app, host=host, port=port, forwarded_allow_ips="*")

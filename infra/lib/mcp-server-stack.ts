@@ -172,10 +172,11 @@ export class McpServerStack extends cdk.Stack {
       port: 8000,
       targets: [this.service],
       healthCheck: {
-        path: "/health",
+        path: "/mcp",
         interval: cdk.Duration.seconds(30),
         healthyThresholdCount: 2,
         unhealthyThresholdCount: 3,
+        healthyHttpCodes: "200,405",
       },
       deregistrationDelay: cdk.Duration.seconds(30),
     });
