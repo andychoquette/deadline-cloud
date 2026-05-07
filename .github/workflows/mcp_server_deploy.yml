@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image-tag: ${{ steps.meta.outputs.tags }}
-      ecr-repo: ${{ steps.login-ecr.outputs.registry }}/deadline-mcp-server-${{ github.event.inputs.stage || 'staging' }}
+      ecr-repo: ${{ steps.login-ecr.outputs.registry }}/deadline-mcp-server-${{ github.event.inputs.stage || 'dev' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,10 +50,13 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.login-ecr.outputs.registry }}/deadline-mcp-server-${{ github.event.inputs.stage || 'staging' }}
+          images: ${{ steps.login-ecr.outputs.registry }}/deadline-mcp-server-${{ github.event.inputs.stage || 'dev' }}
           tags: |
             type=sha,prefix=
             type=raw,value=latest
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build and push
         uses: docker/build-push-action@v5
@@ -62,8 +65,6 @@ jobs:
           file: infra/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   deploy-infra:
     name: Deploy Infrastructure
@@ -93,15 +94,15 @@ jobs:
         working-directory: infra
         run: |
           npx cdk deploy \
-            --context stage=${{ github.event.inputs.stage || 'staging' }} \
+            --context stage=${{ github.event.inputs.stage || 'dev' }} \
             --require-approval never \
             --outputs-file cdk-outputs.json
 
       - name: Update ECS service
         run: |
           aws ecs update-service \
-            --cluster deadline-mcp-${{ github.event.inputs.stage || 'staging' }} \
-            --service $(aws ecs list-services --cluster deadline-mcp-${{ github.event.inputs.stage || 'staging' }} --query 'serviceArns[0]' --output text | xargs basename) \
+            --cluster deadline-mcp-${{ github.event.inputs.stage || 'dev' }} \
+            --service $(aws ecs list-services --cluster deadline-mcp-${{ github.event.inputs.stage || 'dev' }} --query 'serviceArns[0]' --output text | xargs basename) \
             --force-new-deployment
 
       - name: Upload CDK outputs
