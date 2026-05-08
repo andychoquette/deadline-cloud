@@ -127,57 +127,48 @@ class AwsSignInOAuthProvider(OAuthAuthorizationServerProvider):
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams
     ) -> str:
-        """Redirect user to AWS Sign-In Service for authentication.
+        """Authorize the user and issue credentials from the service role.
 
-        Constructs the AWS Sign-In authorization URL with PKCE. The user
-        authenticates in their browser, then AWS redirects back to our
-        callback endpoint with an authorization code.
+        Currently uses the ECS task role credentials directly, providing shared
+        service-level access to Deadline Cloud. The MCP OAuth handshake still
+        authenticates the client (register + PKCE), but all users share the
+        server's IAM permissions.
+
+        TODO: Integrate AWS Sign-In Service with a registered custom client ID
+        that allows non-localhost redirect URIs for per-user credential delegation.
         """
         import urllib.parse
+        import boto3
 
-        from .dpop import DpopKeyPair
+        # Get credentials from the task role (or local environment)
+        session = boto3.Session()
+        credentials = session.get_credentials().get_frozen_credentials()
 
-        # Generate PKCE code verifier for the AWS Sign-In exchange
-        code_verifier = secrets.token_urlsafe(32)
-
-        # Generate DPoP key pair for this session
-        dpop_keypair = DpopKeyPair.generate()
-
-        # Generate a state token to correlate the AWS callback with this MCP auth request
-        aws_state = secrets.token_urlsafe(32)
-
-        # Store the pending auth context
-        self._pending_auth[aws_state] = {
-            "client_id": client.client_id,
-            "redirect_uri": str(params.redirect_uri),
-            "code_challenge": params.code_challenge,
-            "scopes": params.scopes or [],
-            "mcp_state": params.state,
-            "code_verifier": code_verifier,
-            "dpop_keypair": dpop_keypair,
-        }
-
-        # Build PKCE code challenge for AWS Sign-In
-        import hashlib
-
-        code_challenge = _b64url_encode(
-            hashlib.sha256(code_verifier.encode()).digest()
+        # Generate our own authorization code backed by these credentials
+        our_code = secrets.token_urlsafe(32)
+        self._auth_codes[our_code] = StoredAuthCode(
+            code=our_code,
+            client_id=client.client_id,
+            redirect_uri=str(params.redirect_uri),
+            code_challenge=params.code_challenge,
+            aws_credentials={
+                "access_key_id": credentials.access_key,
+                "secret_access_key": credentials.secret_key,
+                "session_token": credentials.token,
+                "expires_in": 3600,
+                "user_id": "service-role",
+            },
+            scopes=params.scopes or [],
         )
 
-        # Build AWS Sign-In authorization URL
-        aws_auth_params = {
-            "client_id": AWS_SIGNIN_CLIENT_ID,
-            "response_type": "code",
-            "scope": "openid",
-            "redirect_uri": self._get_our_callback_url(),
-            "code_challenge": code_challenge,
-            "code_challenge_method": "SHA-256",
-            "state": aws_state,
+        # Redirect directly back to the client with the auth code
+        redirect_params = {
+            "code": our_code,
+            "state": params.state,
         }
-
-        authorize_url = f"{AWS_AUTHORIZE_URL}?{urllib.parse.urlencode(aws_auth_params)}"
-        logger.info(f"Redirecting user to AWS Sign-In: {authorize_url}")
-        return authorize_url
+        redirect_url = f"{params.redirect_uri}?{urllib.parse.urlencode(redirect_params)}"
+        logger.info("Issuing auth code with service credentials")
+        return redirect_url
 
     async def handle_aws_callback(self, code: str, state: str) -> str:
         """Handle the callback from AWS Sign-In Service.
