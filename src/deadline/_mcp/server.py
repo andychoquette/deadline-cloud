@@ -152,6 +152,59 @@ def main(
     elif transport == "streamable-http":
         app.settings.host = host
         app.settings.port = port
-        app.run(transport="streamable-http")
+
+        if auth_mode == "oauth-delegation":
+            _run_with_callback_route(app, host, port)
+        else:
+            app.run(transport="streamable-http")
+
+
+def _run_with_callback_route(mcp_app, host: str, port: int):
+    """Run the server with an additional /oauth/callback route for AWS Sign-In."""
+    import anyio
+    import uvicorn
+    from starlette.requests import Request
+    from starlette.responses import HTMLResponse, RedirectResponse
+    from starlette.routing import Route
+
+    from .oauth_provider import AwsSignInOAuthProvider
+
+    # Get the OAuth provider instance from the app
+    oauth_provider = mcp_app._auth_server_provider
+
+    async def aws_callback(request: Request):
+        """Handle AWS Sign-In redirect after user authenticates."""
+        code = request.query_params.get("code")
+        state = request.query_params.get("state")
+        error = request.query_params.get("error")
+
+        if error:
+            return HTMLResponse(
+                f"<h1>Authentication Failed</h1><p>{error}: {request.query_params.get('error_description', '')}</p>",
+                status_code=400,
+            )
+
+        if not code or not state:
+            return HTMLResponse("<h1>Missing parameters</h1>", status_code=400)
+
+        try:
+            redirect_url = await oauth_provider.handle_aws_callback(code, state)
+            return RedirectResponse(redirect_url)
+        except Exception as e:
+            return HTMLResponse(
+                f"<h1>Authentication Error</h1><p>{e}</p>", status_code=500
+            )
+
+    # Get the base Starlette app and add our callback route
+    starlette_app = mcp_app.streamable_http_app()
+    starlette_app.routes.append(Route("/oauth/callback", aws_callback, methods=["GET"]))
+
+    config = uvicorn.Config(starlette_app, host=host, port=port, forwarded_allow_ips="*")
+    server = uvicorn.Server(config)
+
+    async def serve():
+        await server.serve()
+
+    anyio.run(serve)
 
 

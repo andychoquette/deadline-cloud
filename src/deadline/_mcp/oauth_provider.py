@@ -34,15 +34,21 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 logger = logging.getLogger(__name__)
 
-# AWS Sign-In Service endpoints (same as `aws login` CLI)
+# AWS Sign-In Service endpoints (same as `aws login` CLI and CTDX)
 AWS_SIGNIN_REGION = os.environ.get("AWS_REGION", "us-west-2")
-AWS_AUTHORIZE_URL = f"https://{AWS_SIGNIN_REGION}.signin.aws.amazon.com/authorize"
-AWS_TOKEN_URL = f"https://{AWS_SIGNIN_REGION}.signin.aws.amazon.com/token"
+AWS_AUTHORIZE_URL = f"https://{AWS_SIGNIN_REGION}.signin.aws.amazon.com/v1/authorize"
+AWS_TOKEN_URL = f"https://{AWS_SIGNIN_REGION}.signin.aws.amazon.com/v1/token"
 
-# MCP server's own client ID for the AWS Sign-In Service
-# This is a public client (no secret), similar to AWS CLI
-AWS_SIGNIN_CLIENT_ID = "arn:aws:signin:::console/canvas"
-AWS_SIGNIN_SCOPES = ["sts:*"]
+# Public client ID for same-device OAuth flow (no secret — same as AWS CLI/CTDX)
+# See: https://docs.aws.amazon.com/signin/latest/APIReference/API_dataplane-signin_AuthorizeOAuth2Access.html
+AWS_SIGNIN_CLIENT_ID = "arn:aws:signin:::devtools/same-device"
+
+
+def _b64url_encode(data: bytes) -> str:
+    """Base64url encode without padding."""
+    import base64
+
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
 @dataclass
@@ -121,45 +127,57 @@ class AwsSignInOAuthProvider(OAuthAuthorizationServerProvider):
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams
     ) -> str:
-        """Handle authorization by immediately issuing credentials.
+        """Redirect user to AWS Sign-In Service for authentication.
 
-        For now, this uses the ECS task role's credentials directly (no user
-        browser login required). This validates the full MCP OAuth handshake.
-
-        TODO: Replace with AWS Sign-In Service redirect for per-user auth.
+        Constructs the AWS Sign-In authorization URL with PKCE. The user
+        authenticates in their browser, then AWS redirects back to our
+        callback endpoint with an authorization code.
         """
         import urllib.parse
-        import boto3
 
-        # Get credentials from the task role (or local environment)
-        session = boto3.Session()
-        credentials = session.get_credentials().get_frozen_credentials()
+        from .dpop import DpopKeyPair
 
-        # Generate our own authorization code backed by these credentials
-        our_code = secrets.token_urlsafe(32)
-        self._auth_codes[our_code] = StoredAuthCode(
-            code=our_code,
-            client_id=client.client_id,
-            redirect_uri=str(params.redirect_uri),
-            code_challenge=params.code_challenge,
-            aws_credentials={
-                "access_key_id": credentials.access_key,
-                "secret_access_key": credentials.secret_key,
-                "session_token": credentials.token,
-                "expires_in": 3600,
-                "user_id": "task-role-user",
-            },
-            scopes=params.scopes or [],
+        # Generate PKCE code verifier for the AWS Sign-In exchange
+        code_verifier = secrets.token_urlsafe(32)
+
+        # Generate DPoP key pair for this session
+        dpop_keypair = DpopKeyPair.generate()
+
+        # Generate a state token to correlate the AWS callback with this MCP auth request
+        aws_state = secrets.token_urlsafe(32)
+
+        # Store the pending auth context
+        self._pending_auth[aws_state] = {
+            "client_id": client.client_id,
+            "redirect_uri": str(params.redirect_uri),
+            "code_challenge": params.code_challenge,
+            "scopes": params.scopes or [],
+            "mcp_state": params.state,
+            "code_verifier": code_verifier,
+            "dpop_keypair": dpop_keypair,
+        }
+
+        # Build PKCE code challenge for AWS Sign-In
+        import hashlib
+
+        code_challenge = _b64url_encode(
+            hashlib.sha256(code_verifier.encode()).digest()
         )
 
-        # Redirect directly back to the client with the auth code
-        redirect_params = {
-            "code": our_code,
-            "state": params.state,
+        # Build AWS Sign-In authorization URL
+        aws_auth_params = {
+            "client_id": AWS_SIGNIN_CLIENT_ID,
+            "response_type": "code",
+            "scope": "openid",
+            "redirect_uri": self._get_our_callback_url(),
+            "code_challenge": code_challenge,
+            "code_challenge_method": "SHA-256",
+            "state": aws_state,
         }
-        redirect_url = f"{params.redirect_uri}?{urllib.parse.urlencode(redirect_params)}"
-        logger.info(f"Issuing auth code, redirecting to: {redirect_url}")
-        return redirect_url
+
+        authorize_url = f"{AWS_AUTHORIZE_URL}?{urllib.parse.urlencode(aws_auth_params)}"
+        logger.info(f"Redirecting user to AWS Sign-In: {authorize_url}")
+        return authorize_url
 
     async def handle_aws_callback(self, code: str, state: str) -> str:
         """Handle the callback from AWS Sign-In Service.
@@ -174,8 +192,12 @@ class AwsSignInOAuthProvider(OAuthAuthorizationServerProvider):
         if not pending:
             raise ValueError("Invalid or expired state parameter")
 
-        # Exchange the AWS code for credentials
-        aws_credentials = await self._exchange_aws_code(code)
+        # Exchange the AWS code for credentials using DPoP and PKCE
+        aws_credentials = await self._exchange_aws_code(
+            code=code,
+            code_verifier=pending["code_verifier"],
+            dpop_keypair=pending["dpop_keypair"],
+        )
 
         # Generate our own authorization code for the MCP client
         our_code = secrets.token_urlsafe(32)
@@ -344,26 +366,33 @@ class AwsSignInOAuthProvider(OAuthAuthorizationServerProvider):
 
     # --- AWS Sign-In Service integration ---
 
-    async def _exchange_aws_code(self, code: str) -> dict:
+    async def _exchange_aws_code(self, code: str, code_verifier: str, dpop_keypair) -> dict:
         """Exchange an AWS Sign-In authorization code for credentials.
 
-        This matches the CTDX token_exchange.rs logic:
-        - POST to AWS Sign-In token endpoint
-        - Include DPoP proof (for production; simplified here for dev)
+        Matches the CTDX token_exchange.rs logic:
+        - POST to AWS Sign-In v1/token endpoint
+        - Include DPoP proof header (required by AWS Sign-In Service)
         - Returns access_key_id, secret_access_key, session_token, refresh_token
         """
         import httpx
+
+        # Create DPoP proof token bound to this specific request
+        dpop_token = dpop_keypair.create_dpop_token("POST", AWS_TOKEN_URL)
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 AWS_TOKEN_URL,
                 json={
-                    "grant_type": "authorization_code",
+                    "clientId": AWS_SIGNIN_CLIENT_ID,
+                    "grantType": "authorization_code",
                     "code": code,
-                    "client_id": AWS_SIGNIN_CLIENT_ID,
-                    "redirect_uri": self._get_our_callback_url(),
+                    "codeVerifier": code_verifier,
+                    "redirectUri": self._get_our_callback_url(),
                 },
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "DPoP": dpop_token,
+                },
             )
 
             if response.status_code != 200:
