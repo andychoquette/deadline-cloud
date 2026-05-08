@@ -82,3 +82,33 @@ def cli_mcp_server(transport: str, host: str, port: int, auth_mode: str):
         pass
 
     mcp_main(transport=transport, host=host, port=port, auth_mode=auth_mode)
+
+
+@main.command(name="mcp-credential-helper")
+@click.option("--port", default=29432, type=int, help="Port to listen on (default: 29432)")
+@_handle_error
+def cli_mcp_credential_helper(port: int):
+    """
+    Start the MCP credential helper for remote server authentication.
+
+    This runs a local HTTP server that serves your Deadline Cloud credentials
+    to the remote MCP server during OAuth authentication. The remote server's
+    auth page fetches credentials from this helper, allowing it to make API
+    calls with your identity (per-user access).
+
+    Requires: Active Deadline Cloud credentials (via CTDX or `deadline auth login`).
+
+    The helper only listens on localhost (127.0.0.1) and never exposes
+    credentials to the network.
+    """
+    try:
+        from ...._mcp.credential_helper import main as helper_main
+    except ImportError:
+        click.echo(
+            "Error: MCP dependencies not installed.\n"
+            "Please install them with: pip install 'deadline[mcp]'",
+            err=True,
+        )
+        sys.exit(1)
+
+    helper_main(port=port)

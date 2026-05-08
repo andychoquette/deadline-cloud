@@ -127,48 +127,94 @@ class AwsSignInOAuthProvider(OAuthAuthorizationServerProvider):
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams
     ) -> str:
-        """Authorize the user and issue credentials from the service role.
+        """Authorize the user via credential gate page.
 
-        Currently uses the ECS task role credentials directly, providing shared
-        service-level access to Deadline Cloud. The MCP OAuth handshake still
-        authenticates the client (register + PKCE), but all users share the
-        server's IAM permissions.
+        Redirects the user's browser to a credential gate page that:
+        1. Tries to fetch local AWS credentials from a credential helper on localhost
+        2. If found, injects them so the server uses per-user credentials
+        3. If not found, falls back to the server's own credentials (shared access)
 
-        TODO: Integrate AWS Sign-In Service with a registered custom client ID
-        that allows non-localhost redirect URIs for per-user credential delegation.
+        Either way, the authorize flow completes and the MCP client gets its token.
+        """
+        import urllib.parse
+
+        # Generate a nonce to correlate the credential injection with this auth request
+        nonce = secrets.token_urlsafe(32)
+
+        # Store the pending auth context
+        self._pending_auth[nonce] = {
+            "client_id": client.client_id,
+            "redirect_uri": str(params.redirect_uri),
+            "code_challenge": params.code_challenge,
+            "scopes": params.scopes or [],
+            "state": params.state,
+        }
+
+        # Redirect to our credential gate page
+        server_url = os.environ.get(
+            "MCP_SERVER_URL", "https://5grpve61a5.execute-api.us-west-2.amazonaws.com"
+        )
+        gate_params = {"nonce": nonce}
+        gate_url = f"{server_url}/oauth/credential-gate?{urllib.parse.urlencode(gate_params)}"
+        logger.info(f"Redirecting to credential gate: {gate_url}")
+        return gate_url
+
+    def complete_authorize(self, nonce: str, aws_credentials: Optional[dict] = None) -> str:
+        """Complete the authorize flow after credential collection.
+
+        Called by the credential gate page after optionally injecting user creds.
+        Generates an auth code and returns the redirect URL for the MCP client.
+
+        Args:
+            nonce: The correlation nonce from the authorize request.
+            aws_credentials: User's AWS credentials if available, else None (uses service role).
         """
         import urllib.parse
         import boto3
 
-        # Get credentials from the task role (or local environment)
-        session = boto3.Session()
-        credentials = session.get_credentials().get_frozen_credentials()
+        pending = self._pending_auth.pop(nonce, None)
+        if not pending:
+            raise ValueError("Invalid or expired nonce")
 
-        # Generate our own authorization code backed by these credentials
+        # Use injected user credentials, or fall back to service role
+        if aws_credentials:
+            creds = {
+                "access_key_id": aws_credentials["accessKeyId"],
+                "secret_access_key": aws_credentials["secretAccessKey"],
+                "session_token": aws_credentials.get("sessionToken"),
+                "expires_in": 3600,
+                "user_id": "user-passthrough",
+            }
+            logger.info("Completing authorize with user credentials (per-user access)")
+        else:
+            session = boto3.Session()
+            frozen = session.get_credentials().get_frozen_credentials()
+            creds = {
+                "access_key_id": frozen.access_key,
+                "secret_access_key": frozen.secret_key,
+                "session_token": frozen.token,
+                "expires_in": 3600,
+                "user_id": "service-role",
+            }
+            logger.info("Completing authorize with service role credentials (shared access)")
+
+        # Generate auth code
         our_code = secrets.token_urlsafe(32)
         self._auth_codes[our_code] = StoredAuthCode(
             code=our_code,
-            client_id=client.client_id,
-            redirect_uri=str(params.redirect_uri),
-            code_challenge=params.code_challenge,
-            aws_credentials={
-                "access_key_id": credentials.access_key,
-                "secret_access_key": credentials.secret_key,
-                "session_token": credentials.token,
-                "expires_in": 3600,
-                "user_id": "service-role",
-            },
-            scopes=params.scopes or [],
+            client_id=pending["client_id"],
+            redirect_uri=pending["redirect_uri"],
+            code_challenge=pending["code_challenge"],
+            aws_credentials=creds,
+            scopes=pending["scopes"],
         )
 
-        # Redirect directly back to the client with the auth code
+        # Build redirect URL back to MCP client
         redirect_params = {
             "code": our_code,
-            "state": params.state,
+            "state": pending["state"],
         }
-        redirect_url = f"{params.redirect_uri}?{urllib.parse.urlencode(redirect_params)}"
-        logger.info("Issuing auth code with service credentials")
-        return redirect_url
+        return f"{pending['redirect_uri']}?{urllib.parse.urlencode(redirect_params)}"
 
     async def handle_aws_callback(self, code: str, state: str) -> str:
         """Handle the callback from AWS Sign-In Service.

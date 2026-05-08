@@ -160,44 +160,101 @@ def main(
 
 
 def _run_with_callback_route(mcp_app, host: str, port: int):
-    """Run the server with an additional /oauth/callback route for AWS Sign-In."""
+    """Run the server with credential gate and inject routes for OAuth."""
     import anyio
+    import json
     import uvicorn
     from starlette.requests import Request
-    from starlette.responses import HTMLResponse, RedirectResponse
+    from starlette.responses import HTMLResponse, RedirectResponse, JSONResponse
     from starlette.routing import Route
 
-    from .oauth_provider import AwsSignInOAuthProvider
-
-    # Get the OAuth provider instance from the app
     oauth_provider = mcp_app._auth_server_provider
 
-    async def aws_callback(request: Request):
-        """Handle AWS Sign-In redirect after user authenticates."""
-        code = request.query_params.get("code")
-        state = request.query_params.get("state")
-        error = request.query_params.get("error")
+    CREDENTIAL_GATE_HTML = """<!DOCTYPE html>
+<html><head><title>Deadline Cloud MCP - Authenticating</title></head>
+<body>
+<h2>Authenticating with Deadline Cloud MCP Server...</h2>
+<p id="status">Checking for local credentials...</p>
+<script>
+const NONCE = "{nonce}";
+const SERVER_URL = "{server_url}";
+const HELPER_URL = "http://127.0.0.1:29432/credentials";
 
-        if error:
-            return HTMLResponse(
-                f"<h1>Authentication Failed</h1><p>{error}: {request.query_params.get('error_description', '')}</p>",
-                status_code=400,
-            )
+async function authenticate() {{
+    const status = document.getElementById("status");
 
-        if not code or not state:
-            return HTMLResponse("<h1>Missing parameters</h1>", status_code=400)
+    // Try to fetch credentials from local helper
+    let credentials = null;
+    try {{
+        const resp = await fetch(HELPER_URL, {{mode: "cors", signal: AbortSignal.timeout(3000)}});
+        if (resp.ok) {{
+            credentials = await resp.json();
+            status.textContent = "Local credentials found! Completing authentication...";
+        }}
+    }} catch (e) {{
+        status.textContent = "No local credentials found. Using shared access...";
+    }}
+
+    // Complete the authorize flow (with or without user creds)
+    try {{
+        const resp = await fetch(SERVER_URL + "/oauth/complete-authorize", {{
+            method: "POST",
+            headers: {{"Content-Type": "application/json"}},
+            body: JSON.stringify({{nonce: NONCE, credentials: credentials}})
+        }});
+        const data = await resp.json();
+        if (data.redirect_url) {{
+            status.textContent = "Success! Redirecting...";
+            window.location.href = data.redirect_url;
+        }} else {{
+            status.textContent = "Error: " + (data.error || "Unknown error");
+        }}
+    }} catch (e) {{
+        status.textContent = "Error completing authentication: " + e.message;
+    }}
+}}
+
+authenticate();
+</script>
+</body></html>"""
+
+    async def credential_gate(request: Request):
+        """Serve the credential collection page."""
+        nonce = request.query_params.get("nonce")
+        if not nonce:
+            return HTMLResponse("<h1>Missing nonce</h1>", status_code=400)
+
+        server_url = os.environ.get(
+            "MCP_SERVER_URL", "https://5grpve61a5.execute-api.us-west-2.amazonaws.com"
+        )
+        html = CREDENTIAL_GATE_HTML.replace("{nonce}", nonce).replace("{server_url}", server_url)
+        return HTMLResponse(html)
+
+    async def complete_authorize(request: Request):
+        """Complete the OAuth authorize after credential collection."""
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid request body"}, status_code=400)
+
+        nonce = body.get("nonce")
+        credentials = body.get("credentials")  # May be None
+
+        if not nonce:
+            return JSONResponse({"error": "Missing nonce"}, status_code=400)
 
         try:
-            redirect_url = await oauth_provider.handle_aws_callback(code, state)
-            return RedirectResponse(redirect_url)
+            redirect_url = oauth_provider.complete_authorize(nonce, credentials)
+            return JSONResponse({"redirect_url": redirect_url})
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
         except Exception as e:
-            return HTMLResponse(
-                f"<h1>Authentication Error</h1><p>{e}</p>", status_code=500
-            )
+            return JSONResponse({"error": f"Internal error: {e}"}, status_code=500)
 
-    # Get the base Starlette app and add our callback route
+    # Build the Starlette app with custom routes
     starlette_app = mcp_app.streamable_http_app()
-    starlette_app.routes.append(Route("/oauth/callback", aws_callback, methods=["GET"]))
+    starlette_app.routes.append(Route("/oauth/credential-gate", credential_gate, methods=["GET"]))
+    starlette_app.routes.append(Route("/oauth/complete-authorize", complete_authorize, methods=["POST"]))
 
     config = uvicorn.Config(starlette_app, host=host, port=port, forwarded_allow_ips="*")
     server = uvicorn.Server(config)
