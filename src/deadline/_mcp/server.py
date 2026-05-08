@@ -107,6 +107,15 @@ def _create_app(auth_mode: str = "local", host: str = "127.0.0.1", port: int = 8
         )
 
     mcp_app = FastMCP("deadline-cloud", **kwargs)
+
+    # Clear registration flags so tools can be re-registered on this new app instance
+    from .registry import get_all_tool_names, get_tool_definition
+
+    for tool_name in get_all_tool_names():
+        func = get_tool_definition(tool_name)["func"]
+        if hasattr(func, "_mcp_tool_registered"):
+            del func._mcp_tool_registered
+
     register_api_tools(mcp_app, prefix="deadline_")
     return mcp_app
 
