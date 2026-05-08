@@ -53,7 +53,6 @@ class StoredAuthCode:
     client_id: str
     redirect_uri: str
     code_challenge: str
-    code_challenge_method: str
     aws_credentials: Optional[dict] = None
     created_at: float = field(default_factory=time.time)
     scopes: list[str] = field(default_factory=list)
@@ -113,40 +112,45 @@ class AwsSignInOAuthProvider(OAuthAuthorizationServerProvider):
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams
     ) -> str:
-        """Redirect the user to AWS Sign-In Service for authentication.
+        """Handle authorization by immediately issuing credentials.
 
-        This is the core of the CTDX-style flow: we construct an AWS Sign-In
-        authorization URL and redirect the user there. When they complete login,
-        AWS redirects back to our callback endpoint.
+        For now, this uses the ECS task role's credentials directly (no user
+        browser login required). This validates the full MCP OAuth handshake.
+
+        TODO: Replace with AWS Sign-In Service redirect for per-user auth.
         """
         import urllib.parse
+        import boto3
 
-        # Generate a state token to correlate the AWS callback with this auth request
-        aws_state = secrets.token_urlsafe(32)
+        # Get credentials from the task role (or local environment)
+        session = boto3.Session()
+        credentials = session.get_credentials().get_frozen_credentials()
 
-        # Store the pending auth context so we can complete it on callback
-        self._pending_auth[aws_state] = {
-            "client_id": client.client_id,
-            "redirect_uri": str(params.redirect_uri),
-            "code_challenge": params.code_challenge,
-            "code_challenge_method": params.code_challenge_method or "S256",
-            "scopes": params.scopes or [],
-            "mcp_state": params.state,
+        # Generate our own authorization code backed by these credentials
+        our_code = secrets.token_urlsafe(32)
+        self._auth_codes[our_code] = StoredAuthCode(
+            code=our_code,
+            client_id=client.client_id,
+            redirect_uri=str(params.redirect_uri),
+            code_challenge=params.code_challenge,
+            aws_credentials={
+                "access_key_id": credentials.access_key,
+                "secret_access_key": credentials.secret_key,
+                "session_token": credentials.token,
+                "expires_in": 3600,
+                "user_id": "task-role-user",
+            },
+            scopes=params.scopes or [],
+        )
+
+        # Redirect directly back to the client with the auth code
+        redirect_params = {
+            "code": our_code,
+            "state": params.state,
         }
-
-        # Build the AWS Sign-In authorization URL
-        # This matches the CTDX/AWS CLI `aws login` flow
-        aws_auth_params = {
-            "response_type": "code",
-            "client_id": AWS_SIGNIN_CLIENT_ID,
-            "redirect_uri": self._get_our_callback_url(),
-            "state": aws_state,
-            "scopes": " ".join(AWS_SIGNIN_SCOPES),
-        }
-
-        authorize_url = f"{AWS_AUTHORIZE_URL}?{urllib.parse.urlencode(aws_auth_params)}"
-        logger.info(f"Redirecting user to AWS Sign-In: {authorize_url}")
-        return authorize_url
+        redirect_url = f"{params.redirect_uri}?{urllib.parse.urlencode(redirect_params)}"
+        logger.info(f"Issuing auth code, redirecting to: {redirect_url}")
+        return redirect_url
 
     async def handle_aws_callback(self, code: str, state: str) -> str:
         """Handle the callback from AWS Sign-In Service.
@@ -171,7 +175,6 @@ class AwsSignInOAuthProvider(OAuthAuthorizationServerProvider):
             client_id=pending["client_id"],
             redirect_uri=pending["redirect_uri"],
             code_challenge=pending["code_challenge"],
-            code_challenge_method=pending["code_challenge_method"],
             aws_credentials=aws_credentials,
             scopes=pending["scopes"],
         )
