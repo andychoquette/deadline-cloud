@@ -53,9 +53,18 @@ class StoredAuthCode:
     client_id: str
     redirect_uri: str
     code_challenge: str
+    redirect_uri_provided_explicitly: bool = True
     aws_credentials: Optional[dict] = None
     created_at: float = field(default_factory=time.time)
     scopes: list[str] = field(default_factory=list)
+
+    @property
+    def expires_at(self) -> float:
+        return self.created_at + 600
+
+    @property
+    def is_expired(self) -> bool:
+        return time.time() > self.expires_at
 
 
 @dataclass
