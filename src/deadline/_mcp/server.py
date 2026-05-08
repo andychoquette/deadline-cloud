@@ -170,53 +170,50 @@ def _run_with_callback_route(mcp_app, host: str, port: int):
 
     oauth_provider = mcp_app._auth_server_provider
 
-    CREDENTIAL_GATE_HTML = """<!DOCTYPE html>
-<html><head><title>Deadline Cloud MCP - Authenticating</title></head>
-<body>
-<h2>Authenticating with Deadline Cloud MCP Server...</h2>
-<p id="status">Checking for local credentials...</p>
-<script>
-const NONCE = "{nonce}";
-const SERVER_URL = "{server_url}";
-const HELPER_URL = "http://127.0.0.1:29432/credentials";
-
-async function authenticate() {{
-    const status = document.getElementById("status");
-
-    // Try to fetch credentials from local helper
-    let credentials = null;
-    try {{
-        const resp = await fetch(HELPER_URL, {{mode: "cors", signal: AbortSignal.timeout(3000)}});
-        if (resp.ok) {{
-            credentials = await resp.json();
-            status.textContent = "Local credentials found! Completing authentication...";
-        }}
-    }} catch (e) {{
-        status.textContent = "No local credentials found. Using shared access...";
-    }}
-
-    // Complete the authorize flow (with or without user creds)
-    try {{
-        const resp = await fetch(SERVER_URL + "/oauth/complete-authorize", {{
-            method: "POST",
-            headers: {{"Content-Type": "application/json"}},
-            body: JSON.stringify({{nonce: NONCE, credentials: credentials}})
-        }});
-        const data = await resp.json();
-        if (data.redirect_url) {{
-            status.textContent = "Success! Redirecting...";
-            window.location.href = data.redirect_url;
-        }} else {{
-            status.textContent = "Error: " + (data.error || "Unknown error");
-        }}
-    }} catch (e) {{
-        status.textContent = "Error completing authentication: " + e.message;
-    }}
-}}
-
-authenticate();
-</script>
-</body></html>"""
+    CREDENTIAL_GATE_HTML = (
+        "<!DOCTYPE html>\n"
+        "<html><head><title>Deadline Cloud MCP - Authenticating</title></head>\n"
+        "<body>\n"
+        "<h2>Authenticating with Deadline Cloud MCP Server...</h2>\n"
+        '<p id="status">Checking for local credentials...</p>\n'
+        "<script>\n"
+        'const NONCE = "__NONCE__";\n'
+        'const SERVER_URL = "__SERVER_URL__";\n'
+        'const HELPER_URL = "http://127.0.0.1:29432/credentials";\n'
+        "\n"
+        "async function authenticate() {\n"
+        '    const status = document.getElementById("status");\n'
+        "    let credentials = null;\n"
+        "    try {\n"
+        "        const resp = await fetch(HELPER_URL, {mode: 'cors', signal: AbortSignal.timeout(3000)});\n"
+        "        if (resp.ok) {\n"
+        "            credentials = await resp.json();\n"
+        '            status.textContent = "Local credentials found! Completing authentication...";\n'
+        "        }\n"
+        "    } catch (e) {\n"
+        '        status.textContent = "No local credentials found. Using shared access...";\n'
+        "    }\n"
+        "    try {\n"
+        '        const resp = await fetch(SERVER_URL + "/oauth/complete-authorize", {\n'
+        '            method: "POST",\n'
+        '            headers: {"Content-Type": "application/json"},\n'
+        "            body: JSON.stringify({nonce: NONCE, credentials: credentials})\n"
+        "        });\n"
+        "        const data = await resp.json();\n"
+        "        if (data.redirect_url) {\n"
+        '            status.textContent = "Success! Redirecting...";\n'
+        "            window.location.href = data.redirect_url;\n"
+        "        } else {\n"
+        '            status.textContent = "Error: " + (data.error || "Unknown error");\n'
+        "        }\n"
+        "    } catch (e) {\n"
+        '        status.textContent = "Error completing authentication: " + e.message;\n'
+        "    }\n"
+        "}\n"
+        "authenticate();\n"
+        "</script>\n"
+        "</body></html>"
+    )
 
     async def credential_gate(request: Request):
         """Serve the credential collection page."""
@@ -227,7 +224,7 @@ authenticate();
         server_url = os.environ.get(
             "MCP_SERVER_URL", "https://5grpve61a5.execute-api.us-west-2.amazonaws.com"
         )
-        html = CREDENTIAL_GATE_HTML.replace("{nonce}", nonce).replace("{server_url}", server_url)
+        html = CREDENTIAL_GATE_HTML.replace("__NONCE__", nonce).replace("__SERVER_URL__", server_url)
         return HTMLResponse(html)
 
     async def complete_authorize(request: Request):
