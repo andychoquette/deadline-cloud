@@ -354,7 +354,11 @@ def bundle_submit(
         sys.exit(1)
     except Exception as exc:
         api.get_deadline_cloud_library_telemetry_client().record_error(
-            event_details={"exception_scope": "on_submit"},
+            event_details={
+                "exception_scope": "uncaught",
+                "exception_location": "on_submit",
+                "displayed_to_user": True,
+            },
             exception_type=str(type(exc)),
         )
         raise
