@@ -1,0 +1,23 @@
+[
+  {
+    "id": "read-farm-name",
+    "prompt": "Using the `deadline` CLI, report the display name of the default farm in your final answer.",
+    "tools": ["Bash"],
+    "env": "real_aws",
+    "models": ["opus", "sonnet"],
+    "assert": { "final_text_contains": ["Demo PDX Monitor farm"] }
+  },
+  {
+    "id": "admin-create-farm-via-mock",
+    "prompt": "Using the `aws deadline` CLI, create a Deadline Cloud farm named 'deval-suite-farm' and report its farm ID.",
+    "tools": ["Bash"],
+    "env": "mock",
+    "models": ["opus", "sonnet"],
+    "assert": { "final_text_contains": ["farm-"] }
+  },
+  {
+    "ref": "author_and_submit",
+    "models": ["opus", "sonnet"],
+    "k": 3
+  }
+]

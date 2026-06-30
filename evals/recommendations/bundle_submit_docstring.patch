@@ -1,0 +1,42 @@
+--- a/src/deadline/client/cli/_groups/bundle_group.py
++++ b/src/deadline/client/cli/_groups/bundle_group.py
+@@
+-@click.option("--name", help="The job name to use in place of the one in the job bundle.")
++@click.option("--name", help="Override the job name. Defaults to the `name` field in template.yaml.")
+@@
+     "--priority",
+-    help="The priority of the job. Jobs with a higher priority run first.",
++    help="The priority of the job, 1-100 (default 50). Jobs with a higher priority run first.",
+@@
+     "--yes",
+-    help="Automatically accept any confirmation prompts",
++    help="Skip the interactive confirmation prompt. Required for non-interactive/scripted use.",
+@@
+ def bundle_submit(
+@@
+-    """
+-    Submits an Open Job Description job bundle to a Deadline Cloud queue.
+-    You can provide options to set parameter values, the job name, priority,
+-    and more.
+-
+-    \b
+-    Learn more about [job bundles](https://docs.aws.amazon.com/deadline-cloud/latest/developerguide/build-job-bundle.html)
+-    """
++    """
++    Submits an Open Job Description (OpenJD) job bundle to a Deadline Cloud queue.
++
++    JOB_BUNDLE_DIR is a DIRECTORY (not a file) that must contain a `template.yaml`
++    (the OpenJD job template, specificationVersion 'jobtemplate-2023-09'). It may
++    optionally contain `parameter_values.yaml` and `asset_references.yaml`.
++
++    \b
++    Example:
++      deadline bundle submit ./my_job --yes
++
++    The command returns a job id (job-xxxx). Use `deadline job get --job-id <id>`
++    to check its taskRunStatus until it reaches a terminal state
++    (SUCCEEDED / FAILED / CANCELED).
++
++    \b
++    Learn more about [job bundles](https://docs.aws.amazon.com/deadline-cloud/latest/developerguide/build-job-bundle.html)
++    """
