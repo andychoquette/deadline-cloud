@@ -1,0 +1,26 @@
+name: "PROBE: native integ runner"
+
+# Throwaway validation of reusable_integration_test_native.yml before it is proposed upstream.
+# Lives only on this fork's probe branch. Delete with the branch.
+#
+# Pinned to a commit SHA on the fork of aws-deadline/.github, not a branch: a branch ref would
+# let a later commit change what an earlier run executed, which makes comparing runs meaningless.
+
+on:
+  push:
+    branches:
+      - probe/native-integ
+  workflow_dispatch:
+
+jobs:
+  ProbeLinux:
+    uses: andychoquette/.github/.github/workflows/reusable_integration_test_native.yml@0e7d2a3
+    secrets:
+      AWS_INTEG_TEST_ROLE: ${{ secrets.AWS_INTEG_TEST_ROLE }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+    with:
+      repository: deadline-cloud
+      owner: andychoquette
+      branch: probe/native-integ
+      environment: native-integ-test
+      os: linux
