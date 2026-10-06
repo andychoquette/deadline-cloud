@@ -14,7 +14,7 @@ on:
 
 jobs:
   ProbeLinux:
-    uses: andychoquette/.github/.github/workflows/reusable_integration_test_native.yml@0e7d2a3
+    uses: andychoquette/.github/.github/workflows/reusable_integration_test_native.yml@0e7d2a3cc1bfe179c962485bb233dc6ee0fab4c8
     secrets:
       AWS_INTEG_TEST_ROLE: ${{ secrets.AWS_INTEG_TEST_ROLE }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
